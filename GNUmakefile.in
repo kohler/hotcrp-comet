@@ -1,0 +1,103 @@
+### @configure_input@
+
+AR = ar
+CC = @CC@
+CXX = @CXX@
+
+DEPSDIR := .deps
+DEPCFLAGS = -MD -MF $(DEPSDIR)/$*.d -MP
+top_srcdir = @top_srcdir@
+builddir = .
+
+INCLUDES = -include config.h -I$(top_srcdir) -I$(DEPSDIR) \
+	-I$(top_srcdir)/tamer -I$(top_srcdir)/tamer/http-parser
+CPPFLAGS = $(INCLUDES) @CPPFLAGS@
+CXXFLAGS = -W -Wall @CXXFLAGS@
+
+LIBS = $(LIBTAMER) `$(TAMER) -l` @LIBS@ -lpthread -lm
+LDFLAGS = @LDFLAGS@
+
+TAMEDDIR = $(DEPSDIR)
+TAMER_COMMIT = 9ec39b723ecd218f828f1908740c098491cebf91
+
+CXXCOMPILE = $(CXX) $(DEFS) $(CPPFLAGS) $(CXXFLAGS)
+CXXLINK = $(CXX) $(CXXFLAGS)
+
+TAMER = tamer/compiler/tamer
+TAMERFLAGS = @TAMERFLAGS@
+LIBTAMER = tamer/tamer/.libs/libtamer.a
+
+
+all: hotcrp-comet
+
+%.o: %.c config.h $(DEPSDIR)/stamp
+	$(CXXCOMPILE) $(DEPCFLAGS) -include config.h -c -o $@ $<
+
+%.o: %.cc config.h $(DEPSDIR)/stamp
+	$(CXXCOMPILE) $(DEPCFLAGS) -include config.h -c -o $@ $<
+
+%.o: $(TAMEDDIR)/%.cc config.h $(DEPSDIR)/stamp
+	$(CXXCOMPILE) $(DEPCFLAGS) -include config.h -c -o $@ $<
+
+$(TAMEDDIR)/%.cc: %.tcc config.h $(DEPSDIR)/stamp $(TAMER)
+	$(TAMER) $(TAMERFLAGS) -F $(DEPSDIR)/$*.cc.d -o $@ $<
+
+$(TAMEDDIR)/%.hh: %.thh config.h $(DEPSDIR)/stamp $(TAMER)
+	$(TAMER) $(TAMERFLAGS) -F $(DEPSDIR)/$*.hh.d -o $@ $<
+
+%.S: %.o
+	objdump -S $< > $@
+
+hotcrp-comet: hotcrp-comet.o json.o str.o string.o straccum.o compiler.o \
+		$(LIBTAMER)
+	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+jsontest: jsontest.o string.o straccum.o json.o compiler.o
+	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+msgpacktest: msgpacktest.o string.o straccum.o json.o compiler.o msgpack.o
+	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
+
+config.h: stamp-h
+
+GNUmakefile: GNUmakefile.in config.status
+	CONFIG_FILES=$@ CONFIG_HEADERS= $(SHELL) ./config.status
+
+$(top_srcdir)/configure $(top_srcdir)/config.h.in: $(top_srcdir)/configure.ac
+	cd $(top_srcdir) && autoreconf -i && touch config.h.in
+
+config.status: $(top_srcdir)/configure
+	$(top_srcdir)/configure @ac_configure_args@
+
+stamp-h: $(top_srcdir)/config.h.in config.status
+	CONFIG_FILES= $(SHELL) ./config.status
+	echo > stamp-h
+
+$(DEPSDIR)/stamp:
+	mkdir -p $(dir $@)
+	touch $@
+
+$(TAMER) $(LIBTAMER): tamer-update
+
+tamer-update:
+	@cd ./`git rev-parse --show-cdup` && cur=`git submodule status tamer | head -c 41 | tail -c +2` && if test "$$cur" != $(TAMER_COMMIT) && test -z `cd tamer; git rev-list -n1 $(TAMER_COMMIT)..HEAD 2>/dev/null`; then (echo Updating tamer... 1>&2; cd tamer; git checkout -f master >/dev/null; git reset --hard $(TAMER_COMMIT) || exit; cd ..; git submodule update tamer); fi
+	@-test -f tamer/http-parser/http_parser.h || (cd tamer; git submodule init; git submodule update)
+	cd tamer && $(MAKE) --no-print-directory compiler tamer
+
+clean:
+	rm -f mpvr mprpc jsontest msgpacketst *.o libjson.a
+	rm -rf .deps
+
+DEPFILES := $(wildcard $(DEPSDIR)/*.d)
+ifneq ($(DEPFILES),)
+include $(DEPFILES)
+endif
+
+# tamer dependencies
+hotcrp-comet.o: $(addprefix $(TAMEDDIR)/,hotcrp-comet.cc)
+
+always:
+	@:
+
+.PHONY: all clean always tamer-update
+.PRECIOUS: $(DEPSDIR)/%.cc $(DEPSDIR)/%.hh
