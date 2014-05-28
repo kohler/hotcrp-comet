@@ -77,6 +77,7 @@ tamed void Site::validate(tamer::event<> done) {
         tamer::http_message req, res;
         tamer::fd cfd;
         Json j;
+        bool opened_pollfd = false;
     }
 
     if (status_at_
@@ -85,19 +86,24 @@ tamed void Site::validate(tamer::event<> done) {
             : tamer::drecent() - status_at_ < site_validate_timeout)) {
         done();
         return;
-    } else if (status_check_) {
+    } else {
+        bool checking = !!status_check_;
         status_check_ += std::move(done);
-        return;
+        if (checking)
+            return;
     }
 
-    status_check_ = std::move(done);
     if (path_.empty()) {
         req.url(url_);
         host_ = req.url_host_port();
         path_ = req.url_path() + "deadlines.php?checktracker=1&ajax=1";
     }
-    if (!pollfd || pollfd.socket_error())
+
+ reopen_pollfd:
+    if (!pollfd || pollfd.socket_error()) {
+        opened_pollfd = true;
         twait { tamer::tcp_connect(80, tamer::make_event(pollfd)); }
+    }
     req.method(HTTP_GET)
         .url(path_)
         .header("Host", host_)
@@ -105,7 +111,10 @@ tamed void Site::validate(tamer::event<> done) {
     twait { tamer::http_parser::send_request(pollfd, req,
                                              tamer::make_event()); }
     twait { hp.receive(pollfd, tamer::make_event(res)); }
-    if (hp.ok() && res.ok()
+    if ((!hp.ok() || !res.ok()) && !opened_pollfd) {
+        pollfd.close();
+        goto reopen_pollfd;
+    } else if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
         && j["ok"]
         && j["tracker_status"].is_s()) {
