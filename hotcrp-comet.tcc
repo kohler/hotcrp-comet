@@ -151,7 +151,7 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
             break;
         twait { site.wait(req.query("poll"), tamer::make_event()); }
     }
-    if (site.status())
+    if (!site.status().empty())
         buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
     else
         buf << "{\"ok\":false}";
