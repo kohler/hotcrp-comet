@@ -2,6 +2,7 @@
 #include <tamer/tamer.hh>
 #include <tamer/http.hh>
 #include <unordered_set>
+#include "clp.h"
 #include "json.hh"
 
 static double connection_timeout = 20;
@@ -186,20 +187,61 @@ tamed void connection(tamer::fd cfd) {
     cfd.close();
 }
 
-tamed void listener(int port) {
-    tvars {
-        tamer::fd sfd = tamer::tcp_listen(port);
-        tamer::fd cfd;
-    }
+tamed void listener(tamer::fd sfd) {
+    tvars { tamer::fd cfd; }
     while (sfd) {
         twait { sfd.accept(tamer::make_event(cfd)); }
         connection(std::move(cfd));
     }
 }
 
-int main(int, char**) {
+static const Clp_Option options[] = {
+    { "fg", 0, 0, 0, 0 },
+    { "port", 'p', 0, Clp_ValInt, 0 }
+};
+
+static void usage() {
+    std::cerr << "Usage: hotcrp-comet [-p PORT] [--fg]\n";
+    exit(1);
+}
+
+int main(int argc, char** argv) {
+    int port = 20444;
+    bool fg = false;
+    Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
+    while (1) {
+        int opt = Clp_Next(clp);
+        if (Clp_IsLong(clp, "fg"))
+            fg = true;
+        else if (Clp_IsLong(clp, "port"))
+            port = clp->val.i;
+        else if (opt != Clp_Done)
+            usage();
+        else
+            break;
+    }
+
     tamer::initialize();
-    listener(20444);
+    tamer::fd sfd = tamer::tcp_listen(port);
+    if (!sfd) {
+        std::cerr << "listen: " << strerror(-sfd.error()) << "\n";
+        exit(1);
+    }
+
+    if (!fg) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            std::cerr << "fork: " << strerror(errno) << "\n";
+            exit(1);
+        } else if (pid > 0)
+            exit(0);
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        setpgid(0, 0);
+        signal(SIGHUP, SIG_IGN);
+    }
+
+    listener(sfd);
     tamer::loop();
     tamer::cleanup();
 }
