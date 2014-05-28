@@ -95,10 +95,8 @@ tamed void Site::validate(tamer::event<> done) {
         host_ = req.url_host_port();
         path_ = req.url_path() + "deadlines.php?checktracker=1&ajax=1";
     }
-    std::cerr<< "connecting\n";
     if (!pollfd || pollfd.socket_error())
         twait { tamer::tcp_connect(80, tamer::make_event(pollfd)); }
-    std::cerr<< "connected\n";
     req.method(HTTP_GET)
         .url(path_)
         .header("Host", host_)
@@ -148,11 +146,9 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
     }
     while (cfd) {
         twait { site.validate(tamer::make_event()); }
-        std::cerr << c << "/" << cfd.value() << ": validated\n";
         if (req.query("poll") != site.status())
             break;
         twait { site.wait(req.query("poll"), tamer::make_event()); }
-        std::cerr << c << "/" << cfd.value() << ": polled\n";
     }
     buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
     res.error(HPE_OK)
@@ -169,7 +165,6 @@ tamed void connection(tamer::fd cfd) {
         tamer::http_message req, res, confurl;
         unsigned c = ++counter;
     }
-    std::cerr << c << "/" << cfd.value() << ": start\n";
     res.http_minor(0).error(HPE_PAUSED)
         .header("Connection", "close")
         .header("Access-Control-Allow-Origin", "*")
@@ -177,7 +172,6 @@ tamed void connection(tamer::fd cfd) {
         .header("Access-Control-Allow-Headers", "Accept-Encoding");
     twait { hp.receive(cfd, tamer::add_timeout(connection_timeout,
                                                tamer::make_event(req))); }
-    std::cerr << c << "/" << cfd.value() << ": " << req.url() << "\n";
     if (hp.ok()
         && req.ok()
         && check_conference(req.query("conference"), confurl)) {
@@ -188,9 +182,7 @@ tamed void connection(tamer::fd cfd) {
     }
     if (!res.ok())
         res.status_code(503);
-    std::cerr << c << "/" << cfd.value() << ": " << res.status_code() << " " << res.body() << "\n";
     twait { tamer::http_parser::send_response(cfd, res, tamer::make_event()); }
-    std::cerr << c << "/" << cfd.value() << ": close\n";
     cfd.close();
 }
 
