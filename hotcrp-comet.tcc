@@ -107,10 +107,11 @@ tamed void Site::validate(tamer::event<> done) {
     twait { hp.receive(pollfd, tamer::make_event(res)); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
-        && j["ok"] && j["tracker_status"].is_s())
+        && j["ok"] && j["tracker_status"].is_s()) {
         set_status(j["tracker_status"].to_s());
-    else
-        std::cerr << url_ << " (" << host_ << "): bad status " << j << "\n";
+        std::cerr << url_ << ": status " << j << "\n";
+    } else
+        std::cerr << url_ << ": bad status " << j << "\n";
     if (!hp.should_keep_alive())
         pollfd.close();
     status_at_ = tamer::drecent();
