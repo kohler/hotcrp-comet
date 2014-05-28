@@ -110,7 +110,7 @@ tamed void Site::validate(tamer::event<> done) {
         && j["ok"] && j["tracker_status"].is_s())
         set_status(j["tracker_status"].to_s());
     else
-        std::cerr << "bad status " << j << "\n";
+        std::cerr << url_ << " (" << host_ << "): bad status " << j << "\n";
     if (!hp.should_keep_alive())
         pollfd.close();
     status_at_ = tamer::drecent();
