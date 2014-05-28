@@ -151,7 +151,10 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
             break;
         twait { site.wait(req.query("poll"), tamer::make_event()); }
     }
-    buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
+    if (site.status())
+        buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
+    else
+        buf << "{\"ok\":false}";
     res.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "text/plain")
