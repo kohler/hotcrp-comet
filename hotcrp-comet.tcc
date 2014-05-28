@@ -119,8 +119,10 @@ tamed void Site::validate(tamer::event<> done) {
         std::cerr << url_ << ": status " << status() << "\n";
     } else {
         pollfd.close();
-        if (!opened_pollfd)
+        if (!opened_pollfd) {
+            hp.clear();
             goto reopen_pollfd;
+        }
         std::cerr << url_ << ": bad status " << res.body() << "\n";
     }
     if (!hp.should_keep_alive())
