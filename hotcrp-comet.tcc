@@ -80,6 +80,7 @@ tamed void Site::validate(tamer::event<> done) {
         bool opened_pollfd = false;
     }
 
+    // is status already available?
     if (status_at_
         && (status_.empty()
             ? tamer::drecent() - status_at_ < site_error_validate_timeout
@@ -93,6 +94,7 @@ tamed void Site::validate(tamer::event<> done) {
             return;
     }
 
+    // send request
     if (path_.empty()) {
         req.url(url_);
         host_ = req.url_host_port();
@@ -110,6 +112,8 @@ tamed void Site::validate(tamer::event<> done) {
         .header("Connection", "keep-alive");
     twait { tamer::http_parser::send_request(pollfd, req,
                                              tamer::make_event()); }
+
+    // parse response
     twait { hp.receive(pollfd, tamer::make_event(res)); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
@@ -171,7 +175,7 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
         buf << "{\"ok\":false}";
     res.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
-        .header("Content-Type", "text/plain")
+        .header("Content-Type", "application/json")
         .header("Connection", "close")
         .body(buf.str());
     done();
