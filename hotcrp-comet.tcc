@@ -1,6 +1,7 @@
 // -*- mode: c++ -*-
 #include <tamer/tamer.hh>
 #include <tamer/http.hh>
+#include <fcntl.h>
 #include <unordered_set>
 #include "clp.h"
 #include "json.hh"
@@ -10,6 +11,7 @@ static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
 static tamer::fd pollfd;
 static unsigned counter;
+static const char* pid_file = nullptr;
 
 class Site : public tamer::tamed_class {
   public:
@@ -216,14 +218,40 @@ tamed void listener(tamer::fd sfd) {
     }
 }
 
+tamed void catch_sigterm() {
+    twait { tamer::at_signal(SIGTERM, tamer::make_event()); }
+    exit(1);
+}
+
 static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
+    { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 }
 };
 
 static void usage() {
-    std::cerr << "Usage: hotcrp-comet [-p PORT] [--fg]\n";
+    std::cerr << "Usage: hotcrp-comet [-p PORT] [--fg] [--pid-file PIDFILE]\n";
     exit(1);
+}
+
+extern "C" {
+static void remove_pid_file() {
+    unlink(pid_file);
+}
+}
+
+static void create_pid_file() {
+    int pidfd = open(pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0660);
+    if (pidfd < 0) {
+        std::cerr << pid_file << ": " << strerror(errno) << "\n";
+        exit(1);
+    }
+    char buf[100];
+    int buflen = sprintf(buf, "%ld\n", (long) getpid());
+    ssize_t nw = write(pidfd, buf, buflen);
+    assert(nw == buflen);
+    close(pidfd);
+    atexit(remove_pid_file);
 }
 
 int main(int argc, char** argv) {
@@ -236,6 +264,8 @@ int main(int argc, char** argv) {
             fg = true;
         else if (Clp_IsLong(clp, "port"))
             port = clp->val.i;
+        else if (Clp_IsLong(clp, "pid-file"))
+            pid_file = clp->val.s;
         else if (opt != Clp_Done)
             usage();
         else
@@ -263,6 +293,9 @@ int main(int argc, char** argv) {
     }
 
     listener(sfd);
+    catch_sigterm();
+    if (pid_file)
+        create_pid_file();
     tamer::loop();
     tamer::cleanup();
 }
