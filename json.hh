@@ -1,7 +1,7 @@
 /* Masstree
  * Eddie Kohler, Yandong Mao, Robert Morris
- * Copyright (c) 2012-2013 President and Fellows of Harvard College
- * Copyright (c) 2012-2013 Massachusetts Institute of Technology
+ * Copyright (c) 2012-2014 President and Fellows of Harvard College
+ * Copyright (c) 2012-2014 Massachusetts Institute of Technology
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -116,7 +116,8 @@ class Json {
     inline bool is_i() const;
     inline bool is_unsigned() const;
     inline bool is_u() const;
-    inline bool is_posint() const;
+    inline bool is_signed() const;
+    inline bool is_nonnegint() const;
     inline bool is_double() const;
     inline bool is_d() const;
     inline bool is_number() const;
@@ -165,6 +166,7 @@ class Json {
     inline String to_s() const;
     inline bool to_s(Str& x) const;
     inline bool to_s(String& x) const;
+    inline String& as_s();
     inline const String& as_s() const;
     inline const String& as_s(const String& default_value) const;
 
@@ -897,8 +899,11 @@ class Json_proxy_base {
     bool is_u() const {
         return cvalue().is_u();
     }
-    bool is_posint() const {
-        return cvalue().is_posint();
+    bool is_signed() const {
+        return cvalue().is_signed();
+    }
+    bool is_nonnegint() const {
+        return cvalue().is_nonnegint();
     }
     bool is_double() const {
         return cvalue().is_double();
@@ -1675,7 +1680,10 @@ inline bool Json::is_unsigned() const {
 inline bool Json::is_u() const {
     return is_unsigned();
 }
-inline bool Json::is_posint() const {
+inline bool Json::is_signed() const {
+    return u_.x.type == j_int;
+}
+inline bool Json::is_nonnegint() const {
     return u_.x.type == j_unsigned
         || (u_.x.type == j_int && u_.i.x >= 0);
 }
@@ -2014,6 +2022,12 @@ inline bool Json::to_s(String& x) const {
 inline const String& Json::as_s() const {
     precondition(u_.x.type <= 0 && u_.x.x);
     return reinterpret_cast<const String&>(u_.str);
+}
+
+/** @overload */
+inline String& Json::as_s() {
+    precondition(u_.x.type <= 0 && u_.x.x);
+    return reinterpret_cast<String&>(u_.str);
 }
 
 /** @brief Return the value of this string Json or @a default_value. */

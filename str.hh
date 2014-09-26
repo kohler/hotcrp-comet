@@ -18,7 +18,6 @@
 #include "string_base.hh"
 #include <stdarg.h>
 #include <stdio.h>
-struct kvin;
 
 struct Str : public String_base<Str> {
     typedef Str substring_type;
