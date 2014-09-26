@@ -3,6 +3,8 @@
 #include <tamer/http.hh>
 #include <fcntl.h>
 #include <unordered_set>
+#include <pwd.h>
+#include <grp.h>
 #include "clp.h"
 #include "json.hh"
 
@@ -10,6 +12,7 @@ static double connection_timeout = 20;
 static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
 static tamer::fd pollfd;
+static tamer::fd serverfd;
 static unsigned counter;
 static const char* pid_file = nullptr;
 
@@ -210,23 +213,24 @@ tamed void connection(tamer::fd cfd) {
     cfd.close();
 }
 
-tamed void listener(tamer::fd sfd) {
+tamed void listener() {
     tvars { tamer::fd cfd; }
-    while (sfd) {
-        twait { sfd.accept(tamer::make_event(cfd)); }
+    while (serverfd) {
+        twait { serverfd.accept(tamer::make_event(cfd)); }
         connection(std::move(cfd));
     }
 }
 
 tamed void catch_sigterm() {
-    twait { tamer::at_signal(SIGTERM, tamer::make_event()); }
+    twait volatile { tamer::at_signal(SIGTERM, tamer::make_event()); }
     exit(1);
 }
 
 static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
-    { "port", 'p', 0, Clp_ValInt, 0 }
+    { "port", 'p', 0, Clp_ValInt, 0 },
+    { "user", 'u', 0, Clp_ValString, 0 }
 };
 
 static void usage() {
@@ -234,29 +238,75 @@ static void usage() {
     exit(1);
 }
 
-extern "C" {
-static void remove_pid_file() {
-    unlink(pid_file);
-}
+static pid_t maybe_fork(bool dofork) {
+    if (dofork) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            std::cerr << "fork: " << strerror(errno) << "\n";
+            exit(1);
+        } else if (pid > 0)
+            return pid;
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        setpgid(0, 0);
+        signal(SIGHUP, SIG_IGN);
+    }
+    return getpid();
 }
 
-static void create_pid_file() {
-    int pidfd = open(pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0660);
+static void set_userarg(const String& userarg) {
+    int colon = userarg.find_left(':');
+    String user, group;
+    if (colon >= 0) {
+        user = userarg.substr(0, colon);
+        group = userarg.substr(colon + 1);
+    } else
+        user = group = userarg;
+    struct passwd* pwent = nullptr;
+    struct group* grent = nullptr;
+    if (user && !(pwent = getpwnam(user.c_str())))
+        std::cerr << "user " << user << " does not exist\n";
+    if (group && !(grent = getgrnam(group.c_str())))
+        std::cerr << "group " << group << " does not exist\n";
+    if (grent && setgid(grent->gr_gid) != 0) {
+        std::cerr << "setgid: " << strerror(errno) << "\n";
+        grent = nullptr;
+    }
+    if (pwent && setuid(pwent->pw_uid) != 0) {
+        std::cerr << "setuid: " << strerror(errno) << "\n";
+        pwent = nullptr;
+    }
+    if ((user && !pwent) || (group && !grent))
+        exit(1);
+}
+
+static void create_pid_file(pid_t pid, const char* pid_filename) {
+    int pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
     if (pidfd < 0) {
-        std::cerr << pid_file << ": " << strerror(errno) << "\n";
+        std::cerr << pid_filename << ": " << strerror(errno) << "\n";
         exit(1);
     }
+    pid_file = pid_filename;
     char buf[100];
-    int buflen = sprintf(buf, "%ld\n", (long) getpid());
+    int buflen = sprintf(buf, "%ld\n", (long) pid);
     ssize_t nw = write(pidfd, buf, buflen);
     assert(nw == buflen);
     close(pidfd);
-    atexit(remove_pid_file);
+}
+
+extern "C" {
+static void exiter() {
+    serverfd.close();
+    if (pid_file)
+        unlink(pid_file);
+}
 }
 
 int main(int argc, char** argv) {
-    int port = 20444;
     bool fg = false;
+    int port = 20444;
+    const char* pid_filename = nullptr;
+    String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
     while (1) {
         int opt = Clp_Next(clp);
@@ -265,7 +315,9 @@ int main(int argc, char** argv) {
         else if (Clp_IsLong(clp, "port"))
             port = clp->val.i;
         else if (Clp_IsLong(clp, "pid-file"))
-            pid_file = clp->val.s;
+            pid_filename = clp->val.s;
+        else if (Clp_IsLong(clp, "user"))
+            userarg = clp->val.s;
         else if (opt != Clp_Done)
             usage();
         else
@@ -273,29 +325,22 @@ int main(int argc, char** argv) {
     }
 
     tamer::initialize();
-    tamer::fd sfd = tamer::tcp_listen(port);
-    if (!sfd) {
-        std::cerr << "listen: " << strerror(-sfd.error()) << "\n";
+    serverfd = tamer::tcp_listen(port);
+    if (!serverfd) {
+        std::cerr << "listen: " << strerror(-serverfd.error()) << "\n";
         exit(1);
     }
 
-    if (!fg) {
-        pid_t pid = fork();
-        if (pid == -1) {
-            std::cerr << "fork: " << strerror(errno) << "\n";
-            exit(1);
-        } else if (pid > 0)
-            exit(0);
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        setpgid(0, 0);
-        signal(SIGHUP, SIG_IGN);
-    }
-
-    listener(sfd);
+    atexit(exiter);
+    listener();
     catch_sigterm();
-    if (pid_file)
-        create_pid_file();
+    if (userarg)
+        set_userarg(userarg);
+    pid_t pid = maybe_fork(!fg);
+    if (pid_filename)
+        create_pid_file(pid, pid_filename);
+    if (pid != getpid())
+        exit(0);
     tamer::loop();
     tamer::cleanup();
 }
