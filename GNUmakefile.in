@@ -8,6 +8,10 @@ DEPSDIR := .deps
 DEPCFLAGS = -MD -MF $(DEPSDIR)/$*.d -MP
 top_srcdir = @top_srcdir@
 builddir = .
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+bindir = @bindir@
+conf_auxdir = @conf_auxdir@
 
 INCLUDES = -include config.h -I$(top_srcdir) -I$(DEPSDIR) \
 	-I$(top_srcdir)/tamer -I$(top_srcdir)/tamer/http-parser
@@ -26,6 +30,9 @@ CXXLINK = $(CXX) $(CXXFLAGS)
 TAMER = tamer/compiler/tamer
 TAMERFLAGS = @TAMERFLAGS@
 LIBTAMER = tamer/tamer/.libs/libtamer.a
+
+INSTALL = @INSTALL@
+mkinstalldirs = $(conf_auxdir)/mkinstalldirs
 
 
 all: hotcrp-comet
@@ -88,6 +95,12 @@ clean:
 	rm -f mpvr mprpc jsontest msgpacketst *.o libjson.a
 	rm -rf .deps
 
+install: hotcrp-comet
+	$(INSTALL) hotcrp-comet $(DESTDIR)$(bindir)/hotcrp-comet
+
+uninstall:
+	rm -f $(DESTDIR)$(bindir)/hotcrp-comet
+
 DEPFILES := $(wildcard $(DEPSDIR)/*.d)
 ifneq ($(DEPFILES),)
 include $(DEPFILES)
@@ -99,5 +112,5 @@ hotcrp-comet.o: $(addprefix $(TAMEDDIR)/,hotcrp-comet.cc)
 always:
 	@:
 
-.PHONY: all clean always tamer-update
+.PHONY: all clean always install uninstall tamer-update
 .PRECIOUS: $(DEPSDIR)/%.cc $(DEPSDIR)/%.hh
