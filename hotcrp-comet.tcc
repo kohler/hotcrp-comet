@@ -103,7 +103,7 @@ tamed void Site::validate(tamer::event<> done) {
     if (path_.empty()) {
         req.url(url_);
         host_ = req.url_host_port();
-        path_ = req.url_path() + "deadlines.php?checktracker=1&ajax=1";
+        path_ = req.url_path() + "api.php?checktracker=1";
     }
 
  reopen_pollfd:
