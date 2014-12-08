@@ -16,6 +16,29 @@ static tamer::fd serverfd;
 static unsigned counter;
 static const char* pid_file = nullptr;
 
+class log_msg {
+  public:
+    log_msg();
+    ~log_msg();
+    template <typename T> log_msg& operator<<(T&& x) {
+        stream_ << x;
+        return *this;
+    }
+    std::stringstream stream_;
+};
+
+log_msg::log_msg() {
+    char buf[1024];
+    time_t now = time(nullptr);
+    struct tm* t = localtime(&now);
+    strftime(buf, sizeof(buf), "[%d/%b/%Y %H:%M:%S %z] ", t);
+    stream_ << buf;
+}
+
+log_msg::~log_msg() {
+    std::cerr << stream_.str();
+}
+
 class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
@@ -125,14 +148,14 @@ tamed void Site::validate(tamer::event<> done) {
         && j["ok"]
         && j["tracker_status"].is_s()) {
         set_status(j["tracker_status"].to_s());
-        std::cerr << url_ << ": status " << status() << "\n";
+        log_msg() << url_ << ": status " << status() << "\n";
     } else {
         pollfd.close();
         if (!opened_pollfd) {
             hp.clear();
             goto reopen_pollfd;
         }
-        std::cerr << url_ << ": bad status " << res.body() << "\n";
+        log_msg() << url_ << ": bad status " << res.body() << "\n";
     }
     if (!hp.should_keep_alive())
         pollfd.close();
@@ -228,6 +251,7 @@ tamed void catch_sigterm() {
 
 static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
+    { "log-file", 0, 0, Clp_ValString, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
     { "user", 'u', 0, Clp_ValString, 0 }
@@ -302,10 +326,15 @@ static void exiter() {
 }
 }
 
+static void driver_error_handler(int, int err, std::string msg) {
+    log_msg() << "tamer error: " << strerror(err) << ", " << msg << "\n";
+}
+
 int main(int argc, char** argv) {
     bool fg = false;
     int port = 20444;
     const char* pid_filename = nullptr;
+    const char* log_filename = nullptr;
     String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
     while (1) {
@@ -316,6 +345,8 @@ int main(int argc, char** argv) {
             port = clp->val.i;
         else if (Clp_IsLong(clp, "pid-file"))
             pid_filename = clp->val.s;
+        else if (Clp_IsLong(clp, "log-file"))
+            log_filename = clp->val.s;
         else if (Clp_IsLong(clp, "user"))
             userarg = clp->val.s;
         else if (opt != Clp_Done)
@@ -325,6 +356,7 @@ int main(int argc, char** argv) {
     }
 
     tamer::initialize();
+    tamer::driver::main->set_error_handler(driver_error_handler);
     serverfd = tamer::tcp_listen(port);
     if (!serverfd) {
         std::cerr << "listen: " << strerror(-serverfd.error()) << "\n";
@@ -334,13 +366,22 @@ int main(int argc, char** argv) {
     atexit(exiter);
     listener();
     catch_sigterm();
+
     if (userarg)
         set_userarg(userarg);
+
+    if (log_filename && !freopen(log_filename, "a", stderr)) {
+        std::cerr << log_filename << ": " << strerror(errno) << "\n";
+        exit(1);
+    }
+
     pid_t pid = maybe_fork(!fg);
+
     if (pid_filename)
         create_pid_file(pid, pid_filename);
     if (pid != getpid())
         exit(0);
+
     tamer::loop();
     tamer::cleanup();
 }
