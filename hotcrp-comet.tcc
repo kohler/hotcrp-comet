@@ -3,6 +3,7 @@
 #include <tamer/http.hh>
 #include <fcntl.h>
 #include <unordered_set>
+#include <fstream>
 #include <pwd.h>
 #include <grp.h>
 #include "clp.h"
@@ -15,28 +16,33 @@ static tamer::fd pollfd;
 static tamer::fd serverfd;
 static unsigned counter;
 static const char* pid_file = nullptr;
+static std::ofstream logf;
 
 class log_msg {
   public:
     log_msg();
     ~log_msg();
     template <typename T> log_msg& operator<<(T&& x) {
-        stream_ << x;
+        if (logf.is_open())
+            stream_ << x;
         return *this;
     }
     std::stringstream stream_;
 };
 
 log_msg::log_msg() {
-    char buf[1024];
-    time_t now = time(nullptr);
-    struct tm* t = localtime(&now);
-    strftime(buf, sizeof(buf), "[%d/%b/%Y %H:%M:%S %z] ", t);
-    stream_ << buf;
+    if (logf.is_open()) {
+        char buf[1024];
+        time_t now = time(nullptr);
+        struct tm* t = localtime(&now);
+        strftime(buf, sizeof(buf), "[%d/%b/%Y %H:%M:%S %z] ", t);
+        stream_ << buf;
+    }
 }
 
 log_msg::~log_msg() {
-    std::cerr << stream_.str();
+    if (logf.is_open())
+        logf << stream_.str() << std::endl;
 }
 
 class Site : public tamer::tamed_class {
@@ -148,14 +154,14 @@ tamed void Site::validate(tamer::event<> done) {
         && j["ok"]
         && j["tracker_status"].is_s()) {
         set_status(j["tracker_status"].to_s());
-        log_msg() << url_ << ": status " << status() << "\n";
+        log_msg() << url_ << ": status " << status();
     } else {
         pollfd.close();
         if (!opened_pollfd) {
             hp.clear();
             goto reopen_pollfd;
         }
-        log_msg() << url_ << ": bad status " << res.body() << "\n";
+        log_msg() << url_ << ": bad status " << res.body();
     }
     if (!hp.should_keep_alive())
         pollfd.close();
@@ -272,6 +278,7 @@ static pid_t maybe_fork(bool dofork) {
             return pid;
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
+        close(STDERR_FILENO);
         setpgid(0, 0);
         signal(SIGHUP, SIG_IGN);
     }
@@ -327,7 +334,7 @@ static void exiter() {
 }
 
 static void driver_error_handler(int, int err, std::string msg) {
-    log_msg() << "tamer error: " << strerror(err) << ", " << msg << "\n";
+    log_msg() << "tamer error: " << strerror(err) << ", " << msg;
 }
 
 int main(int argc, char** argv) {
@@ -367,13 +374,16 @@ int main(int argc, char** argv) {
     listener();
     catch_sigterm();
 
+    if (log_filename) {
+        logf.open(log_filename, std::ofstream::app);
+        if (logf.bad()) {
+            std::cerr << log_filename << ": " << strerror(errno) << "\n";
+            exit(1);
+        }
+    }
+
     if (userarg)
         set_userarg(userarg);
-
-    if (log_filename && !freopen(log_filename, "a", stderr)) {
-        std::cerr << log_filename << ": " << strerror(errno) << "\n";
-        exit(1);
-    }
 
     pid_t pid = maybe_fork(!fg);
 
