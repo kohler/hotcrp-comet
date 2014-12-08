@@ -23,13 +23,15 @@ fi
 RETVAL=0
 prog="hotcrp-comet"
 pidfile=${PIDFILE-/var/run/hotcrp-comet/hotcrp-comet.pid}
+logfile=${LOGFILE-/var/log/hotcrp-comet.log}
 lockfile=${LOCKFILE-/var/lock/subsys/hotcrp-comet}
+comet_args=${HOTCRP_COMET_ARGS---log-file $logfile}
 
 start () {
         echo -n $"Starting $prog: "
         dir=$(dirname ${pidfile})
         [ -d $dir ] || mkdir $dir
-        daemon --pidfile ${pidfile} hotcrp-comet $HOTCRP_COMET_ARGS
+        daemon --pidfile ${pidfile} hotcrp-comet $comet_args
         RETVAL=$?
         echo
         [ $RETVAL -eq 0 ] && touch ${lockfile}
