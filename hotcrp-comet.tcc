@@ -237,10 +237,10 @@ tamed void connection(tamer::fd cfd) {
             else if (!req.query("update").empty())
                 update_handler(req, res, c);
         }
-        if (!res.ok()) {
+        if (!res.ok() || !hp.should_keep_alive())
             res.header("Connection", "close");
+        if (!res.ok())
             res.status_code(503);
-        }
         twait { hp.send_response(cfd, res, tamer::make_event()); }
         if (!hp.should_keep_alive())
             break;
