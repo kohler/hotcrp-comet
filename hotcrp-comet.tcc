@@ -220,25 +220,33 @@ tamed void connection(tamer::fd cfd) {
         tamer::http_parser hp(HTTP_REQUEST);
         tamer::http_message req, res, confurl;
         unsigned c = ++counter;
+        double timeout = connection_timeout;
     }
-    res.http_minor(0).error(HPE_PAUSED)
-        .header("Connection", "close")
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Credentials", "true")
-        .header("Access-Control-Allow-Headers", "Accept-Encoding");
-    twait { hp.receive(cfd, tamer::add_timeout(connection_timeout,
-                                               tamer::make_event(req))); }
-    if (hp.ok()
-        && req.ok()
-        && check_conference(req.query("conference"), confurl)) {
-        if (!req.query("poll").empty())
-            twait volatile { poll_handler(req, res, cfd, c, tamer::make_event()); }
-        else if (!req.query("update").empty())
-            update_handler(req, res, c);
+    while (cfd) {
+        req.error(HPE_PAUSED);
+        twait { hp.receive(cfd, tamer::add_timeout(timeout, tamer::make_event(req))); }
+        if (!hp.ok() || !req.ok())
+            break;
+        res.error(HPE_PAUSED)
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Credentials", "true")
+            .header("Access-Control-Allow-Headers", "Accept-Encoding");
+        if (check_conference(req.query("conference"), confurl)) {
+            if (!req.query("poll").empty())
+                twait volatile { poll_handler(req, res, cfd, c, tamer::make_event()); }
+            else if (!req.query("update").empty())
+                update_handler(req, res, c);
+        }
+        if (!res.ok()) {
+            res.header("Connection", "close");
+            res.status_code(503);
+        }
+        twait { hp.send_response(cfd, res, tamer::make_event()); }
+        if (!hp.should_keep_alive())
+            break;
+        res.clear();
+        timeout = 5; // keep-alive timeout drops to 5sec
     }
-    if (!res.ok())
-        res.status_code(503);
-    twait { tamer::http_parser::send_response(cfd, res, tamer::make_event()); }
     cfd.close();
 }
 
