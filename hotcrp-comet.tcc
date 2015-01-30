@@ -14,16 +14,16 @@ static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
 static tamer::fd pollfd;
 static tamer::fd serverfd;
-static unsigned counter;
+static unsigned nconnections;
 static const char* pid_file = nullptr;
-static std::ofstream logf;
+static std::ostream* logf;
 
 class log_msg {
   public:
     log_msg();
     ~log_msg();
     template <typename T> log_msg& operator<<(T&& x) {
-        if (logf.is_open())
+        if (logf)
             stream_ << x;
         return *this;
     }
@@ -31,24 +31,30 @@ class log_msg {
 };
 
 log_msg::log_msg() {
-    if (logf.is_open()) {
+    if (logf) {
         char buf[1024];
         time_t now = time(nullptr);
         struct tm* t = localtime(&now);
-        strftime(buf, sizeof(buf), "[%d/%b/%Y %H:%M:%S %z] ", t);
+        strftime(buf, sizeof(buf), "[%m/%d/%Y %H:%M:%S %z] ", t);
         stream_ << buf;
     }
 }
 
 log_msg::~log_msg() {
-    if (logf.is_open())
-        logf << stream_.str() << std::endl;
+    if (logf)
+        *logf << stream_.str() << std::endl;
 }
 
 class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
-        : url_(std::move(url)), status_at_(0) {
+        : url_(std::move(url)), create_at_(tamer::drecent()),
+          status_at_(0), status_change_at_(0),
+          npoll_(0), nupdate_(0), npollers_(0) {
+        tamer::http_message req;
+        req.url(url_);
+        host_ = req.url_host_port();
+        path_ = req.url_path() + "api.php?checktracker=1";
     }
 
     inline const std::string& url() const {
@@ -60,6 +66,7 @@ class Site : public tamer::tamed_class {
     void set_status(const std::string& status) {
         if (status_ != status) {
             status_ = status;
+            status_change_at_ = tamer::drecent();
             status_change_();
         }
     }
@@ -75,6 +82,19 @@ class Site : public tamer::tamed_class {
         else
             done();
     }
+
+    void add_poller() {
+        ++npoll_;
+        ++npollers_;
+    }
+    void resolve_poller() {
+        --npollers_;
+    }
+    void add_update() {
+        ++nupdate_;
+    }
+
+    Json site_status() const;
 
     class hasher {
       public:
@@ -94,15 +114,30 @@ class Site : public tamer::tamed_class {
     std::string host_;
     std::string path_;
     std::string status_;
+    double create_at_;
     double status_at_;
+    double status_change_at_;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
+    unsigned long long npoll_;
+    unsigned long long nupdate_;
+    unsigned npollers_;
 };
 
 std::unordered_set<Site, Site::hasher, Site::comparator> sites;
 
 Site& make_site(const std::string& url) {
     return const_cast<Site&>(*sites.emplace(url).first);
+}
+
+Json Site::site_status() const {
+    return Json().set("site", url_)
+        .set("status", status_)
+        .set("age", (unsigned long) (tamer::drecent() - create_at_))
+        .set("status_age", (unsigned long) (tamer::drecent() - status_change_at_))
+        .set("npoll", npoll_)
+        .set("nupdate", nupdate_)
+        .set("npollers", npollers_);
 }
 
 tamed void Site::validate(tamer::event<> done) {
@@ -121,18 +156,14 @@ tamed void Site::validate(tamer::event<> done) {
             : tamer::drecent() - status_at_ < site_validate_timeout)) {
         done();
         return;
-    } else {
+    }
+
+    // is status already being checked?
+    {
         bool checking = !!status_check_;
         status_check_ += std::move(done);
         if (checking)
             return;
-    }
-
-    // send request
-    if (path_.empty()) {
-        req.url(url_);
-        host_ = req.url_host_port();
-        path_ = req.url_path() + "api.php?checktracker=1";
     }
 
  reopen_pollfd:
@@ -179,9 +210,9 @@ bool check_conference(std::string arg, tamer::http_message& conf_m) {
     return true;
 }
 
-void update_handler(tamer::http_message& req, tamer::http_message& res,
-                    unsigned) {
+void update_handler(tamer::http_message& req, tamer::http_message& res) {
     Site& site = make_site(req.query("conference"));
+    site.add_update();
     site.set_status(req.query("update"));
     res.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
@@ -191,12 +222,13 @@ void update_handler(tamer::http_message& req, tamer::http_message& res,
 }
 
 tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
-                        tamer::fd cfd, unsigned c, tamer::event<> done) {
+                        tamer::fd cfd, tamer::event<> done) {
     tvars {
         Site& site = make_site(req.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
     }
+    site.add_poller();
     while (cfd) {
         twait { site.validate(tamer::make_event()); }
         if (req.query("poll") != site.status())
@@ -212,16 +244,29 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
         .header("Content-Type", "application/json")
         .header("Connection", "close")
         .body(buf.str());
+    site.resolve_poller();
     done();
+}
+
+void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
+    Json j = Json().set("nconnections", nconnections);
+    Json sitesj = Json();
+    for (auto it = sites.begin(); it != sites.end(); ++it)
+        sitesj[it->url()] = it->site_status();
+    j.set("sites", sitesj);
+    res.error(HPE_OK)
+        .date_header("Date", tamer::recent().tv_sec)
+        .header("Content-Type", "application/json")
+        .body(j.unparse(Json::indent_depth(2)));
 }
 
 tamed void connection(tamer::fd cfd) {
     tvars {
         tamer::http_parser hp(HTTP_REQUEST);
         tamer::http_message req, res, confurl;
-        unsigned c = ++counter;
         double timeout = connection_timeout;
     }
+    ++nconnections;
     while (cfd) {
         req.error(HPE_PAUSED);
         twait { hp.receive(cfd, tamer::add_timeout(timeout, tamer::make_event(req))); }
@@ -231,11 +276,13 @@ tamed void connection(tamer::fd cfd) {
             .header("Access-Control-Allow-Origin", "*")
             .header("Access-Control-Allow-Credentials", "true")
             .header("Access-Control-Allow-Headers", "Accept-Encoding");
-        if (check_conference(req.query("conference"), confurl)) {
+        if (req.url_path() == "/hotcrp_comet_status")
+            hotcrp_comet_status_handler(req, res);
+        else if (check_conference(req.query("conference"), confurl)) {
             if (!req.query("poll").empty())
-                twait volatile { poll_handler(req, res, cfd, c, tamer::make_event()); }
+                twait volatile { poll_handler(req, res, cfd, tamer::make_event()); }
             else if (!req.query("update").empty())
-                update_handler(req, res, c);
+                update_handler(req, res);
         }
         if (!res.ok() || !hp.should_keep_alive())
             res.header("Connection", "close");
@@ -248,6 +295,7 @@ tamed void connection(tamer::fd cfd) {
         timeout = 5; // keep-alive timeout drops to 5sec
     }
     cfd.close();
+    --nconnections;
 }
 
 tamed void listener() {
@@ -382,13 +430,16 @@ int main(int argc, char** argv) {
     listener();
     catch_sigterm();
 
+    std::ofstream logf_stream;
     if (log_filename) {
-        logf.open(log_filename, std::ofstream::app);
-        if (logf.bad()) {
+        logf_stream.open(log_filename, std::ofstream::app);
+        if (logf_stream.bad()) {
             std::cerr << log_filename << ": " << strerror(errno) << "\n";
             exit(1);
         }
-    }
+        logf = &logf_stream;
+    } else if (fg)
+        logf = &std::cerr;
 
     if (userarg)
         set_userarg(userarg);
