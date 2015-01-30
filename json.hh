@@ -88,6 +88,7 @@ class Json {
     inline Json(double x);
     inline Json(bool x);
     inline Json(const String& x);
+    inline Json(const std::string& x);
     inline Json(Str x);
     inline Json(const char* x);
     template <typename T> inline Json(const std::vector<T>& x);
@@ -103,6 +104,7 @@ class Json {
     template <typename... Args>
     static inline Json object(Args&&... rest);
     static inline Json make_string(const String& x);
+    static inline Json make_string(const std::string& x);
     static inline Json make_string(const char* s, int len);
 
     // Type information
@@ -196,6 +198,7 @@ class Json {
 
     const Json& operator[](Str key) const;
     inline Json_object_proxy<Json> operator[](const String& key);
+    inline Json_object_str_proxy<Json> operator[](const std::string& key);
     inline Json_object_str_proxy<Json> operator[](Str key);
     inline Json_object_str_proxy<Json> operator[](const char* key);
 
@@ -1072,6 +1075,9 @@ class Json_proxy_base {
     Json_object_proxy<P> operator[](const String& key) {
         return Json_object_proxy<P>(*static_cast<P*>(this), key);
     }
+    Json_object_str_proxy<P> operator[](std::string key) {
+        return Json_object_str_proxy<P>(*static_cast<P*>(this), Str(key.data(), key.length()));
+    }
     Json_object_str_proxy<P> operator[](Str key) {
         return Json_object_str_proxy<P>(*static_cast<P*>(this), key);
     }
@@ -1541,6 +1547,11 @@ inline Json::Json(const String& x) {
     u_.str = x.internal_rep();
     u_.str.ref();
 }
+inline Json::Json(const std::string& x) {
+    u_.str.reset_ref();
+    String str(x);
+    str.swap(u_.str);
+}
 inline Json::Json(Str x) {
     u_.str.reset_ref();
     String str(x);
@@ -1637,7 +1648,11 @@ inline Json Json::object(Args&&... rest) {
     return j;
 }
 /** @brief Return a string-valued Json. */
-inline Json Json::make_string(const String &x) {
+inline Json Json::make_string(const String& x) {
+    return Json(x);
+}
+/** @overload */
+inline Json Json::make_string(const std::string& x) {
     return Json(x);
 }
 /** @overload */
@@ -2243,6 +2258,11 @@ inline const Json& Json::operator[](Str key) const {
     to contain the new value. */
 inline Json_object_proxy<Json> Json::operator[](const String& key) {
     return Json_object_proxy<Json>(*this, key);
+}
+
+/** @overload */
+inline Json_object_str_proxy<Json> Json::operator[](const std::string& key) {
+    return Json_object_str_proxy<Json>(*this, Str(key.data(), key.length()));
 }
 
 /** @overload */
