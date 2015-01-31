@@ -611,8 +611,8 @@ inline bool operator!=(const Json::const_object_iterator& a, const Json::const_o
 class Json::const_array_iterator { public:
     typedef Json::size_type difference_type;
     typedef Json value_type;
-    typedef const Json* pointer_type;
-    typedef const Json& reference_type;
+    typedef const Json* pointer;
+    typedef const Json& reference;
     typedef std::random_access_iterator_tag iterator_category;
 
     const_array_iterator() {
@@ -640,14 +640,16 @@ class Json::const_array_iterator { public:
     void operator++(int) {
         ++i_;
     }
-    void operator++() {
+    const_array_iterator& operator++() {
         ++i_;
+        return *this;
     }
     void operator--(int) {
         --i_;
     }
-    void operator--() {
+    const_array_iterator& operator--() {
         --i_;
+        return *this;
     }
     const_array_iterator& operator+=(difference_type x) {
         i_ += x;
@@ -671,8 +673,8 @@ class Json::const_array_iterator { public:
 };
 
 class Json::array_iterator : public const_array_iterator { public:
-    typedef const Json* pointer_type;
-    typedef const Json& reference_type;
+    typedef const Json* pointer;
+    typedef const Json& reference;
 
     array_iterator() {
     }
@@ -689,6 +691,14 @@ class Json::array_iterator : public const_array_iterator { public:
     }
     Json& value() const {
         return **this;
+    }
+    array_iterator& operator++() {
+        ++i_;
+        return *this;
+    }
+    array_iterator& operator--() {
+        --i_;
+        return *this;
     }
     array_iterator& operator+=(difference_type x) {
         i_ += x;
@@ -750,8 +760,8 @@ inline Json::const_array_iterator::difference_type operator-(const Json::const_a
 
 class Json::const_iterator { public:
     typedef std::pair<const String, Json&> value_type;
-    typedef const value_type* pointer_type;
-    typedef const value_type& reference_type;
+    typedef const value_type* pointer;
+    typedef const value_type& reference;
     typedef std::forward_iterator_tag iterator_category;
 
     const_iterator()
@@ -821,8 +831,8 @@ class Json::const_iterator { public:
 };
 
 class Json::iterator : public const_iterator { public:
-    typedef value_type* pointer_type;
-    typedef value_type& reference_type;
+    typedef value_type* pointer;
+    typedef value_type& reference;
 
     iterator() {
     }
