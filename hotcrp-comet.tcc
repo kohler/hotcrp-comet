@@ -12,6 +12,8 @@
 static double connection_timeout = 20;
 static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
+static double min_poll_timeout = 240;
+static double max_poll_timeout = 300;
 static tamer::fd pollfd;
 static tamer::fd serverfd;
 static unsigned nconnections;
@@ -227,13 +229,17 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
         Site& site = make_site(req.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
+        double timeout_at = tamer::drecent() + min_poll_timeout
+            + drand48() * (max_poll_timeout - min_poll_timeout);
     }
     site.add_poller();
-    while (cfd) {
+    while (cfd && tamer::drecent() < timeout_at) {
         twait { site.validate(tamer::make_event()); }
         if (req.query("poll") != site.status())
             break;
-        twait { site.wait(req.query("poll"), tamer::make_event()); }
+        twait { site.wait(req.query("poll"),
+                          tamer::add_timeout(timeout_at - tamer::drecent(),
+                                             tamer::make_event())); }
     }
     if (!site.status().empty())
         buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
