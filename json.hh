@@ -3105,21 +3105,21 @@ inline Json& Json::operator-=(double x) {
     return subtract(x);
 }
 inline Json& Json::operator+=(const Json& x) {
-    if (!x.is_null()) {
-        // XXX what if both are integers
-        force_number();
-        u_.d.x = as_d() + x.as_d();
-        u_.d.type = j_double;
-    }
+    if (x.is_unsigned())
+        add(u_.u.x);
+    else if (x.is_int())
+        add(u_.i.x);
+    else if (!x.is_null())
+        add(x.as_d());
     return *this;
 }
 inline Json& Json::operator-=(const Json& x) {
-    if (!x.is_null()) {
-        // XXX what if both are integers
-        force_number();
-        u_.d.x = as_d() - x.as_d();
-        u_.d.type = j_double;
-    }
+    if (x.is_unsigned())
+        subtract(u_.u.x);
+    else if (x.is_int())
+        subtract(u_.i.x);
+    else if (!x.is_null())
+        subtract(x.as_d());
     return *this;
 }
 inline Json operator+(Json x) {
