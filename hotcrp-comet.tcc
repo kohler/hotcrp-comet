@@ -10,9 +10,10 @@
 #include "clp.h"
 #include "json.hh"
 
+#define LOG_ALWAYS 0
 #define LOG_DEBUG 1
 
-#define MAX_LOGLEVEL LOG_DEBUG
+#define MAX_LOGLEVEL LOG_ALWAYS
 
 static double connection_timeout = 20;
 static double site_validate_timeout = 120;
@@ -48,11 +49,21 @@ class log_msg {
     void add_prefix();
 };
 
+#define TIMESTAMP_FMT "%m/%d/%Y %H:%M:%S %z"
+
+std::string timestamp_string(double at) {
+    char buf[1024];
+    time_t now = (time_t) at;
+    struct tm* t = localtime(&now);
+    strftime(buf, sizeof(buf), TIMESTAMP_FMT, t);
+    return buf;
+}
+
 void log_msg::add_prefix() {
     char buf[1024];
     time_t now = time(nullptr);
     struct tm* t = localtime(&now);
-    strftime(buf, sizeof(buf), "[%m/%d/%Y %H:%M:%S %z] ", t);
+    strftime(buf, sizeof(buf), "[" TIMESTAMP_FMT "] ", t);
     stream_ << buf;
 }
 
@@ -314,7 +325,9 @@ void Connection::update_handler() {
 }
 
 void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
-    Json j = Json().set("nconnections", nconnections);
+    Json j = Json().set("at", tamer::drecent())
+        .set("at_time", timestamp_string(tamer::drecent()))
+        .set("nconnections", nconnections);
 
     Json sitesj = Json();
     for (auto it = sites.begin(); it != sites.end(); ++it)
