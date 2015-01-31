@@ -1,13 +1,18 @@
-// -*- mode: c++ -*-
+// -*- mode: c++; c-basic-offset: 4 -*-
 #include <tamer/tamer.hh>
 #include <tamer/http.hh>
 #include <fcntl.h>
 #include <unordered_set>
 #include <fstream>
+#include <algorithm>
 #include <pwd.h>
 #include <grp.h>
 #include "clp.h"
 #include "json.hh"
+
+#define LOG_DEBUG 1
+
+#define MAX_LOGLEVEL LOG_DEBUG
 
 static double connection_timeout = 20;
 static double site_validate_timeout = 120;
@@ -18,33 +23,37 @@ static tamer::fd pollfd;
 static tamer::fd serverfd;
 static unsigned nconnections;
 static const char* pid_file = nullptr;
-static std::ostream* logf;
+static std::ostream* logs;
+static int loglevel;
 
 class log_msg {
-  public:
-    log_msg();
-    ~log_msg();
+ public:
+    log_msg(int msglevel = 0)
+        : logf_(logs && msglevel <= loglevel && msglevel <= MAX_LOGLEVEL ? logs : 0) {
+        if (logf_)
+            add_prefix();
+    }
+    ~log_msg() {
+        if (logf_)
+            *logf_ << stream_.str() << std::endl;
+    }
     template <typename T> log_msg& operator<<(T&& x) {
-        if (logf)
+        if (logf_)
             stream_ << x;
         return *this;
     }
+ private:
+    std::ostream* logf_;
     std::stringstream stream_;
+    void add_prefix();
 };
 
-log_msg::log_msg() {
-    if (logf) {
-        char buf[1024];
-        time_t now = time(nullptr);
-        struct tm* t = localtime(&now);
-        strftime(buf, sizeof(buf), "[%m/%d/%Y %H:%M:%S %z] ", t);
-        stream_ << buf;
-    }
-}
-
-log_msg::~log_msg() {
-    if (logf)
-        *logf << stream_.str() << std::endl;
+void log_msg::add_prefix() {
+    char buf[1024];
+    time_t now = time(nullptr);
+    struct tm* t = localtime(&now);
+    strftime(buf, sizeof(buf), "[%m/%d/%Y %H:%M:%S %z] ", t);
+    stream_ << buf;
 }
 
 class Site : public tamer::tamed_class {
@@ -96,7 +105,7 @@ class Site : public tamer::tamed_class {
         ++nupdate_;
     }
 
-    Json site_status() const;
+    Json status_json() const;
 
     class hasher {
       public:
@@ -132,7 +141,7 @@ Site& make_site(const std::string& url) {
     return const_cast<Site&>(*sites.emplace(url).first);
 }
 
-Json Site::site_status() const {
+Json Site::status_json() const {
     return Json().set("site", url_)
         .set("status", status_)
         .set("age", (unsigned long) (tamer::drecent() - create_at_))
@@ -212,32 +221,71 @@ bool check_conference(std::string arg, tamer::http_message& conf_m) {
     return true;
 }
 
-void update_handler(tamer::http_message& req, tamer::http_message& res) {
-    Site& site = make_site(req.query("conference"));
-    site.add_update();
-    site.set_status(req.query("update"));
-    res.error(HPE_OK)
-        .date_header("Date", tamer::recent().tv_sec)
-        .header("Content-Type", "application/json")
-        .header("Connection", "close")
-        .body("{\"ok\":true}");
+
+
+class Connection {
+ public:
+    static void add(tamer::fd cfd);
+    static std::vector<Connection*> all;
+    Json status_json() const;
+ private:
+    tamer::fd cfd_;
+    tamer::http_message req_;
+    tamer::http_message res_;
+    int cfd_value_;
+    double created_at_;
+    int status_;
+    enum status { s_request, s_poll, s_response };
+    Connection(tamer::fd cfd);
+    ~Connection();
+    tamed void poll_handler(tamer::event<> done);
+    void update_handler();
+    tamed void handler();
+};
+
+std::vector<Connection*> Connection::all;
+
+Connection::Connection(tamer::fd cfd)
+    : cfd_(std::move(cfd)), cfd_value_(cfd_.value()), created_at_(tamer::drecent()),
+      status_(s_request) {
+    assert(cfd_.value() >= 0);
+    if (all.size() <= (unsigned) cfd_.value())
+        all.resize(cfd_.value() + 1, nullptr);
+    assert(!all[cfd_.value()]);
+    all[cfd_.value()] = this;
 }
 
-tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
-                        tamer::fd cfd, tamer::event<> done) {
+void Connection::add(tamer::fd cfd) {
+    Connection* c = new Connection(std::move(cfd));
+    c->handler();
+}
+
+Connection::~Connection() {
+    cfd_.close();
+    all[cfd_value_] = nullptr;
+}
+
+Json Connection::status_json() const {
+    static const char* stati[] = {"request", "poll", "response"};
+    return Json().set("fd", cfd_.value())
+        .set("age", (unsigned long) (tamer::drecent() - created_at_))
+        .set("status", stati[status_]);
+}
+
+tamed void Connection::poll_handler(tamer::event<> done) {
     tvars {
-        Site& site = make_site(req.query("conference"));
+        Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
         double timeout_at = tamer::drecent() + min_poll_timeout
             + drand48() * (max_poll_timeout - min_poll_timeout);
     }
     site.add_poller();
-    while (cfd && tamer::drecent() < timeout_at) {
+    while (cfd_ && tamer::drecent() < timeout_at) {
         twait { site.validate(tamer::make_event()); }
-        if (req.query("poll") != site.status())
+        if (req_.query("poll") != site.status())
             break;
-        twait { site.wait(req.query("poll"),
+        twait { site.wait(req_.query("poll"),
                           tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event())); }
     }
@@ -245,7 +293,7 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
         buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
     else
         buf << "{\"ok\":false}";
-    res.error(HPE_OK)
+    res_.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "application/json")
         .header("Connection", "close")
@@ -254,61 +302,86 @@ tamed void poll_handler(tamer::http_message& req, tamer::http_message& res,
     done();
 }
 
+void Connection::update_handler() {
+    Site& site = make_site(req_.query("conference"));
+    site.add_update();
+    site.set_status(req_.query("update"));
+    res_.error(HPE_OK)
+        .date_header("Date", tamer::recent().tv_sec)
+        .header("Content-Type", "application/json")
+        .header("Connection", "close")
+        .body("{\"ok\":true}");
+}
+
 void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
     Json j = Json().set("nconnections", nconnections);
+
     Json sitesj = Json();
     for (auto it = sites.begin(); it != sites.end(); ++it)
-        sitesj[it->url()] = it->site_status();
+        sitesj[it->url()] = it->status_json();
     j.set("sites", sitesj);
+
+    Json connj = Json();
+    for (auto it = Connection::all.begin(); it != Connection::all.end(); ++it)
+        if (*it)
+            connj.push_back((*it)->status_json());
+    std::sort(connj.abegin(), connj.aend(), [](const Json& a, const Json& b) {
+            return a.get("age").as_d() > b.get("age").as_d();
+        });
+    j.set("connections", connj);
+
     res.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "application/json")
         .body(j.unparse(Json::indent_depth(2)));
 }
 
-tamed void connection(tamer::fd cfd) {
+tamed void Connection::handler() {
     tvars {
         tamer::http_parser hp(HTTP_REQUEST);
-        tamer::http_message req, res, confurl;
+        tamer::http_message confurl;
         double timeout = connection_timeout;
     }
     ++nconnections;
-    while (cfd) {
-        req.error(HPE_PAUSED);
-        twait { hp.receive(cfd, tamer::add_timeout(timeout, tamer::make_event(req))); }
-        if (!hp.ok() || !req.ok())
+    while (cfd_) {
+        req_.error(HPE_PAUSED);
+        status_ = s_request;
+        twait { hp.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
+        if (!hp.ok() || !req_.ok())
             break;
-        res.error(HPE_PAUSED)
+        res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
             .header("Access-Control-Allow-Credentials", "true")
             .header("Access-Control-Allow-Headers", "Accept-Encoding");
-        if (req.url_path() == "/hotcrp_comet_status")
-            hotcrp_comet_status_handler(req, res);
-        else if (check_conference(req.query("conference"), confurl)) {
-            if (!req.query("poll").empty())
-                twait volatile { poll_handler(req, res, cfd, tamer::make_event()); }
-            else if (!req.query("update").empty())
-                update_handler(req, res);
+        if (req_.url_path() == "/hotcrp_comet_status")
+            hotcrp_comet_status_handler(req_, res_);
+        else if (check_conference(req_.query("conference"), confurl)) {
+            if (!req_.query("poll").empty()) {
+                status_ = s_poll;
+                twait volatile { poll_handler(tamer::make_event()); }
+            } else if (!req_.query("update").empty())
+                update_handler();
         }
-        if (!res.ok() || !hp.should_keep_alive())
-            res.header("Connection", "close");
-        if (!res.ok())
-            res.status_code(503);
-        twait { hp.send_response(cfd, res, tamer::make_event()); }
+        if (!res_.ok() || !hp.should_keep_alive())
+            res_.header("Connection", "close");
+        if (!res_.ok())
+            res_.status_code(503);
+        status_ = s_response;
+        twait { hp.send_response(cfd_, res_, tamer::make_event()); }
         if (!hp.should_keep_alive())
             break;
-        res.clear();
+        res_.clear();
         timeout = 5; // keep-alive timeout drops to 5sec
     }
-    cfd.close();
-    --nconnections;
+    delete this;
 }
 
 tamed void listener() {
     tvars { tamer::fd cfd; }
     while (serverfd) {
         twait { serverfd.accept(tamer::make_event(cfd)); }
-        connection(std::move(cfd));
+        if (cfd)
+            Connection::add(std::move(cfd));
     }
 }
 
@@ -443,9 +516,9 @@ int main(int argc, char** argv) {
             std::cerr << log_filename << ": " << strerror(errno) << "\n";
             exit(1);
         }
-        logf = &logf_stream;
+        logs = &logf_stream;
     } else if (fg)
-        logf = &std::cerr;
+        logs = &std::cerr;
 
     if (userarg)
         set_userarg(userarg);
