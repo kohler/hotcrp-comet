@@ -381,7 +381,7 @@ tamed void Connection::handler() {
                 status_ = s_poll;
                 twait volatile {
                     Json j = Json::parse(req_.query("timeout"));
-                    poll_handler(j.is_number() ? j.to_d() : 0, tamer::make_event());
+                    poll_handler(j.is_number() ? j.to_d() / 1000. : 0, tamer::make_event());
                 }
             } else if (!req_.query("update").empty())
                 update_handler();
