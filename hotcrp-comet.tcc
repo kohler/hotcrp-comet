@@ -249,7 +249,7 @@ class Connection {
     enum status { s_request, s_poll, s_response };
     Connection(tamer::fd cfd);
     ~Connection();
-    tamed void poll_handler(tamer::event<> done);
+    tamed void poll_handler(double timeout, tamer::event<> done);
     void update_handler();
     tamed void handler();
 };
@@ -283,13 +283,21 @@ Json Connection::status_json() const {
         .set("status", stati[status_]);
 }
 
-tamed void Connection::poll_handler(tamer::event<> done) {
+double poll_timeout(double timeout) {
+    if (timeout <= 0 || timeout > min_poll_timeout) {
+        double t = min_poll_timeout + drand48() * (max_poll_timeout - min_poll_timeout);
+        if (timeout <= 0 || timeout > t)
+            timeout = t;
+    }
+    return timeout;
+}
+
+tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     tvars {
         Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
-        double timeout_at = tamer::drecent() + min_poll_timeout
-            + drand48() * (max_poll_timeout - min_poll_timeout);
+        double timeout_at = tamer::drecent() + poll_timeout(timeout);
     }
     site.add_poller();
     while (cfd_ && tamer::drecent() < timeout_at) {
@@ -371,7 +379,10 @@ tamed void Connection::handler() {
         else if (check_conference(req_.query("conference"), confurl)) {
             if (!req_.query("poll").empty()) {
                 status_ = s_poll;
-                twait volatile { poll_handler(tamer::make_event()); }
+                twait volatile {
+                    Json j = Json::parse(req_.query("timeout"));
+                    poll_handler(j.is_number() ? j.to_d() : 0, tamer::make_event());
+                }
             } else if (!req_.query("update").empty())
                 update_handler();
         }
