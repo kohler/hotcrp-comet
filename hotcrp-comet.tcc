@@ -23,6 +23,7 @@ static double max_poll_timeout = 300;
 static tamer::fd pollfd;
 static tamer::fd serverfd;
 static unsigned nconnections;
+static unsigned connection_limit;
 static const char* pid_file = nullptr;
 static std::ostream* logs;
 static int loglevel;
@@ -85,6 +86,8 @@ class Site : public tamer::tamed_class {
     inline const std::string& status() const {
         return status_;
     }
+    inline bool is_valid() const;
+    inline bool status_may_equal(const std::string& status) const;
     void set_status(const std::string& status) {
         if (status_ != status) {
             status_ = status;
@@ -99,10 +102,12 @@ class Site : public tamer::tamed_class {
     tamed void validate(tamer::event<> done);
 
     void wait(const std::string& status, tamer::event<> done) {
-        if (status_ == status)
+        if (is_valid() && !status_may_equal(status))
+            done();
+        else if (is_valid())
             status_change_ += std::move(done);
         else
-            done();
+            validate(std::move(done));
     }
 
     void add_poller() {
@@ -162,6 +167,15 @@ Json Site::status_json() const {
         .set("npollers", npollers_);
 }
 
+inline bool Site::is_valid() const {
+    double to = status_.empty() ? site_error_validate_timeout : site_validate_timeout;
+    return status_at_ && tamer::drecent() - status_at_ < to;
+}
+
+inline bool Site::status_may_equal(const std::string& status) const {
+    return !is_valid() || (!status.empty() && status_ == status);
+}
+
 tamed void Site::validate(tamer::event<> done) {
     tvars {
         tamer::http_parser hp(HTTP_RESPONSE);
@@ -172,10 +186,7 @@ tamed void Site::validate(tamer::event<> done) {
     }
 
     // is status already available?
-    if (status_at_
-        && (status_.empty()
-            ? tamer::drecent() - status_at_ < site_error_validate_timeout
-            : tamer::drecent() - status_at_ < site_validate_timeout)) {
+    if (is_valid()) {
         done();
         return;
     }
@@ -234,19 +245,34 @@ bool check_conference(std::string arg, tamer::http_message& conf_m) {
 
 
 
-class Connection {
+class Connection : public tamer::tamed_class {
  public:
-    static void add(tamer::fd cfd);
+    static Connection* add(tamer::fd cfd);
     static std::vector<Connection*> all;
+    static void clear_one(Connection* dont_clear);
+
     Json status_json() const;
- private:
+    double age() const {
+        return tamer::drecent() - created_at_;
+    }
+
+  private:
+    enum state { s_request, s_poll, s_response };
+
     tamer::fd cfd_;
+    tamer::http_parser hp_;
     tamer::http_message req_;
     tamer::http_message res_;
     int cfd_value_;
     double created_at_;
-    int status_;
-    enum status { s_request, s_poll, s_response };
+    tamer::event<> poll_event_;
+    int state_;
+    Connection* prev_;
+    Connection* next_;
+
+    static Connection* state_head[3];
+    void set_state(int state);
+
     Connection(tamer::fd cfd);
     ~Connection();
     tamed void poll_handler(double timeout, tamer::event<> done);
@@ -255,32 +281,81 @@ class Connection {
 };
 
 std::vector<Connection*> Connection::all;
+Connection* Connection::state_head[3];
 
 Connection::Connection(tamer::fd cfd)
-    : cfd_(std::move(cfd)), cfd_value_(cfd_.value()), created_at_(tamer::drecent()),
-      status_(s_request) {
+    : cfd_(std::move(cfd)), hp_(HTTP_REQUEST),
+      cfd_value_(cfd_.value()), created_at_(tamer::drecent()), state_(-1) {
     assert(cfd_.value() >= 0);
     if (all.size() <= (unsigned) cfd_.value())
         all.resize(cfd_.value() + 1, nullptr);
     assert(!all[cfd_.value()]);
     all[cfd_.value()] = this;
+    ++nconnections;
 }
 
-void Connection::add(tamer::fd cfd) {
+Connection* Connection::add(tamer::fd cfd) {
     Connection* c = new Connection(std::move(cfd));
     c->handler();
+    return c;
 }
 
 Connection::~Connection() {
     cfd_.close();
     all[cfd_value_] = nullptr;
+    --nconnections;
+    set_state(-1);
+}
+
+void Connection::set_state(int state) {
+    assert(state >= -1 && state < 3);
+    if (state != state_ && state_ != -1) {
+        prev_->next_ = next_;
+        next_->prev_ = prev_;
+        if (state_head[state_] == this && next_ == this)
+            state_head[state_] = nullptr;
+        else if (state_head[state_] == this)
+            state_head[state_] = next_;
+    }
+    if (state != state_ && state != -1) {
+        if (state_head[state]) {
+            prev_ = state_head[state]->prev_;
+            next_ = state_head[state];
+        } else
+            prev_ = next_ = this;
+        prev_->next_ = next_->prev_ = state_head[state] = this;
+    }
+    state_ = state;
+}
+
+void Connection::clear_one(Connection* dont_clear) {
+    Connection* c = nullptr;
+    if (state_head[s_request])
+        c = state_head[s_request]->prev_;
+    if ((!c || c == dont_clear || c->age() < 1)
+        && state_head[s_poll])
+        c = state_head[s_poll]->prev_;
+    if (!c || c == dont_clear)
+        /* do nothing */;
+    else if (c->state_ == s_request) {
+        log_msg() << "premature delete " << c->status_json();
+        delete c;
+    } else if (c->state_ == s_poll) {
+        Connection* c = state_head[s_poll]->prev_;
+        log_msg() << "premature close " << c->status_json();
+        c->set_state(s_response);
+        c->hp_.clear_should_keep_alive();
+        c->poll_event_();
+    }
 }
 
 Json Connection::status_json() const {
     static const char* stati[] = {"request", "poll", "response"};
-    return Json().set("fd", cfd_.value())
-        .set("age", (unsigned long) (tamer::drecent() - created_at_))
-        .set("status", stati[status_]);
+    Json j = Json().set("fd", cfd_.value())
+        .set("age", (unsigned long) (tamer::drecent() - created_at_));
+    if (state_ >= 0)
+        j.set("state", stati[state_]);
+    return j;
 }
 
 double poll_timeout(double timeout) {
@@ -300,14 +375,13 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         double timeout_at = tamer::drecent() + poll_timeout(timeout);
     }
     site.add_poller();
-    while (cfd_ && tamer::drecent() < timeout_at) {
-        twait { site.validate(tamer::make_event()); }
-        if (req_.query("poll") != site.status())
-            break;
-        twait { site.wait(req_.query("poll"),
-                          tamer::add_timeout(timeout_at - tamer::drecent(),
-                                             tamer::make_event())); }
-    }
+    while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
+           && site.status_may_equal(req_.query("poll")))
+        twait {
+            poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
+                                             tamer::make_event());
+            site.wait(req_.query("poll"), poll_event_);
+        }
     if (!site.status().empty())
         buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
     else
@@ -335,7 +409,8 @@ void Connection::update_handler() {
 void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
     Json j = Json().set("at", tamer::drecent())
         .set("at_time", timestamp_string(tamer::drecent()))
-        .set("nconnections", nconnections);
+        .set("nconnections", nconnections)
+        .set("connection_limit", connection_limit);
 
     Json sitesj = Json();
     for (auto it = sites.begin(); it != sites.end(); ++it)
@@ -359,16 +434,15 @@ void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res)
 
 tamed void Connection::handler() {
     tvars {
-        tamer::http_parser hp(HTTP_REQUEST);
         tamer::http_message confurl;
         double timeout = connection_timeout;
     }
-    ++nconnections;
+    // log_msg() << "new connection " << status_json();
     while (cfd_) {
         req_.error(HPE_PAUSED);
-        status_ = s_request;
-        twait { hp.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
-        if (!hp.ok() || !req_.ok())
+        set_state(s_request);
+        twait { hp_.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
+        if (!hp_.ok() || !req_.ok())
             break;
         res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
@@ -378,7 +452,7 @@ tamed void Connection::handler() {
             hotcrp_comet_status_handler(req_, res_);
         else if (check_conference(req_.query("conference"), confurl)) {
             if (!req_.query("poll").empty()) {
-                status_ = s_poll;
+                set_state(s_poll);
                 twait volatile {
                     Json j = Json::parse(req_.query("timeout"));
                     poll_handler(j.is_number() ? j.to_d() / 1000. : 0, tamer::make_event());
@@ -386,13 +460,13 @@ tamed void Connection::handler() {
             } else if (!req_.query("update").empty())
                 update_handler();
         }
-        if (!res_.ok() || !hp.should_keep_alive())
+        if (!res_.ok() || !hp_.should_keep_alive())
             res_.header("Connection", "close");
         if (!res_.ok())
             res_.status_code(503);
-        status_ = s_response;
-        twait { hp.send_response(cfd_, res_, tamer::make_event()); }
-        if (!hp.should_keep_alive())
+        set_state(s_response);
+        twait { hp_.send_response(cfd_, res_, tamer::make_event()); }
+        if (!hp_.should_keep_alive())
             break;
         res_.clear();
         timeout = 5; // keep-alive timeout drops to 5sec
@@ -404,8 +478,11 @@ tamed void listener() {
     tvars { tamer::fd cfd; }
     while (serverfd) {
         twait { serverfd.accept(tamer::make_event(cfd)); }
-        if (cfd)
-            Connection::add(std::move(cfd));
+        if (cfd) {
+            Connection* c = Connection::add(std::move(cfd));
+            if (nconnections > connection_limit)
+                Connection::clear_one(c);
+        }
     }
 }
 
@@ -546,6 +623,11 @@ int main(int argc, char** argv) {
 
     if (userarg)
         set_userarg(userarg);
+    connection_limit = tamer::fd::open_limit();
+    if (connection_limit > 100)
+        connection_limit -= 20;
+    else
+        connection_limit = 0;
 
     pid_t pid = maybe_fork(!fg);
 
