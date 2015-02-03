@@ -68,12 +68,15 @@ void log_msg::add_prefix() {
     stream_ << buf;
 }
 
+
 class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
         : url_(std::move(url)), create_at_(tamer::drecent()),
           status_at_(0), status_change_at_(0),
           npoll_(0), nupdate_(0), npollers_(0) {
+        if (url_.back() != '/')
+            url_ += '/';
         tamer::http_message req;
         req.url(url_);
         host_ = req.url_host_port();
