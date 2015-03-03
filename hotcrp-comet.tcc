@@ -80,7 +80,7 @@ class Site : public tamer::tamed_class {
         tamer::http_message req;
         req.url(url_);
         host_ = req.url_host_port();
-        path_ = req.url_path() + "api.php?checktracker=1";
+        path_ = req.url_path() + "api.php?fn=trackerstatus";
     }
 
     inline const std::string& url() const {
