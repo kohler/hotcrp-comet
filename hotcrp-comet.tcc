@@ -221,14 +221,14 @@ tamed void Site::validate(tamer::event<> done) {
         && j["ok"]
         && j["tracker_status"].is_s()) {
         set_status(j["tracker_status"].to_s());
-        log_msg() << url_ << ": status " << status();
+        log_msg() << url_ << ": tracker status " << status();
     } else {
         pollfd.close();
         if (!opened_pollfd) {
             hp.clear();
             goto reopen_pollfd;
         }
-        log_msg() << url_ << ": bad status " << res.body();
+        log_msg() << url_ << ": bad tracker status " << res.body();
     }
     if (!hp.should_keep_alive())
         pollfd.close();
