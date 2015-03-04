@@ -50,7 +50,7 @@ class log_msg {
     void add_prefix();
 };
 
-#define TIMESTAMP_FMT "%m/%d/%Y %H:%M:%S %z"
+#define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
 std::string timestamp_string(double at) {
     char buf[1024];
