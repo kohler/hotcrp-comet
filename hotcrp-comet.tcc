@@ -161,13 +161,17 @@ Site& make_site(const std::string& url) {
 }
 
 Json Site::status_json() const {
-    return Json().set("site", url_)
+    Json j = Json().set("site", url_)
         .set("status", status_)
         .set("age", (unsigned long) (tamer::drecent() - create_at_))
         .set("status_age", (unsigned long) (tamer::drecent() - status_change_at_))
+        .set("check_age", (unsigned long) (tamer::drecent() - status_at_))
         .set("npoll", npoll_)
         .set("nupdate", nupdate_)
         .set("npollers", npollers_);
+    if (status_check_)
+        j.set("status_check", true);
+    return j;
 }
 
 inline bool Site::is_valid() const {
