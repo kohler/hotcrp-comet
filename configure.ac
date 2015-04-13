@@ -2,12 +2,11 @@ dnl Process this file with autoconf to produce a configure script.
 
 AC_INIT([hotcrp-comet], [0.1])
 AC_CONFIG_AUX_DIR([tamer])
-AC_PREREQ(2.60)
-
+AC_PREREQ([2.60])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([GNUmakefile])
 AC_CONFIG_SUBDIRS([tamer])
-AC_SUBST(ac_configure_args)
+AC_SUBST([ac_configure_args])
 
 ac_user_cxx=${CXX+y}
 ac_user_cxxflags=${CXXFLAGS+y}
