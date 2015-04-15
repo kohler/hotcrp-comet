@@ -625,6 +625,7 @@ int main(int argc, char** argv) {
             exit(1);
         }
         logs = &logf_stream;
+        log_msg(LOG_ALWAYS) << "hotcrp-comet started";
     } else if (fg)
         logs = &std::cerr;
 
