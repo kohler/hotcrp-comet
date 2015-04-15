@@ -91,15 +91,17 @@ class Site : public tamer::tamed_class {
     }
     inline bool is_valid() const;
     inline bool status_may_equal(const std::string& status) const;
-    void set_status(const std::string& status) {
+    bool set_status(const std::string& status) {
         if (status_ != status) {
             status_ = status;
             status_change_at_ = tamer::drecent();
             status_change_();
-        }
+            return true;
+        } else
+            return false;
     }
-    inline void set_status(const String& status) {
-        set_status(std::string(status.data(), status.length()));
+    inline bool set_status(const String& status) {
+        return set_status(std::string(status.data(), status.length()));
     }
 
     tamed void validate(tamer::event<> done);
@@ -224,8 +226,9 @@ tamed void Site::validate(tamer::event<> done) {
         && (j = Json::parse(res.body()))
         && j["ok"]
         && j["tracker_status"].is_s()) {
-        set_status(j["tracker_status"].to_s());
-        log_msg() << url_ << ": tracker status " << status();
+        bool change = set_status(j["tracker_status"].to_s());
+        if (change || status() != "off")
+            log_msg() << url_ << ": tracker status " << status();
     } else {
         pollfd.close();
         if (!opened_pollfd) {
