@@ -2,7 +2,7 @@
 #include <tamer/tamer.hh>
 #include <tamer/http.hh>
 #include <fcntl.h>
-#include <unordered_set>
+#include <unordered_map>
 #include <fstream>
 #include <algorithm>
 #include <pwd.h>
@@ -128,19 +128,6 @@ class Site : public tamer::tamed_class {
 
     Json status_json() const;
 
-    class hasher {
-      public:
-        size_t operator()(const Site& s) const {
-            return std::hash<std::string>()(s.url());
-        }
-    };
-    class comparator {
-      public:
-        bool operator()(const Site& a, const Site& b) const {
-            return a.url_ == b.url_;
-        }
-    };
-
   private:
     std::string url_;
     std::string host_;
@@ -156,10 +143,14 @@ class Site : public tamer::tamed_class {
     unsigned npollers_;
 };
 
-std::unordered_set<Site, Site::hasher, Site::comparator> sites;
+typedef std::unordered_map<std::string, Site> site_map_type;
+site_map_type sites;
 
 Site& make_site(const std::string& url) {
-    return const_cast<Site&>(*sites.emplace(url).first);
+    auto it = sites.find(url);
+    if (it == sites.end())
+        it = sites.insert(std::make_pair(url, Site(url))).first;
+    return it->second;
 }
 
 Json Site::status_json() const {
@@ -424,7 +415,7 @@ void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res)
 
     Json sitesj = Json();
     for (auto it = sites.begin(); it != sites.end(); ++it)
-        sitesj[it->url()] = it->status_json();
+        sitesj[it->first] = it->second.status_json();
     j.set("sites", sitesj);
 
     Json connj = Json();
