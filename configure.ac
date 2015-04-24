@@ -108,29 +108,38 @@ KVDB_CHECK_BUILTIN([__sync_lock_release_set],
     [[void f(long* x) { __sync_lock_release(x); }]])
 
 
-dnl C++ features
+dnl
+dnl C++11 features
+dnl
+SAVE_CXX="$CXX"
+if test -n "$GCC"; then CXX="$CXX -Werror"; fi
 
-AC_CACHE_CHECK([whether the C++ compiler understands 'auto'], [ac_cv_cxx_auto], [
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[struct s { int a; }; int f(s x) { auto &y = x; return y.a; }]], [[]])],
-	[ac_cv_cxx_auto=yes], [ac_cv_cxx_auto=no])])
-if test "$ac_cv_cxx_auto" != yes -a -z "$ac_user_cxx"; then
-    CXX="${CXX} -std=gnu++0x"
-    AC_MSG_CHECKING([whether the C++ compiler with -std=gnu++0x understands 'auto'])
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[struct s { int a; }; int f(s x) { auto &y = x; return y.a; }]], [[]])],
-	[ac_cv_cxx_auto=yes], [ac_cv_cxx_auto=no])
-    AC_MSG_RESULT([$ac_cv_cxx_auto])
+AC_CACHE_CHECK([whether the C++ compiler understands rvalue references], [ac_cv_cxx_rvalue_references], [
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int &) { return 1; } int f(int &&) { return 0; }]], [[return f(int());]])],
+	[ac_cv_cxx_rvalue_references=yes], [ac_cv_cxx_rvalue_references=no])])
+if test "$ac_cv_cxx_rvalue_references" != yes; then
+    SAVE_CXX="${SAVE_CXX} -std=gnu++0x"
+    CXX="${SAVE_CXX} -Werror"
+    AC_MSG_CHECKING([whether the C++ compiler with -std=gnu++0x understands rvalue refs])
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int &) { return 1; } int f(int &&) { return 0; }]], [[return f(int());]])],
+	[ac_cv_cxx_rvalue_references=yes], [ac_cv_cxx_rvalue_references=no])
+    AC_MSG_RESULT([$ac_cv_cxx_rvalue_references])
+fi
+if test "$ac_cv_cxx_rvalue_references" = yes; then
+    AC_DEFINE([TAMER_HAVE_CXX_RVALUE_REFERENCES], [1], [Define if the C++ compiler understands rvalue references.])
 fi
 
-if test "$ac_cv_cxx_auto" = yes; then
-    AC_DEFINE([HAVE_CXX_AUTO], [1], [Define if the C++ compiler understands 'auto'.])
-else
+AC_MSG_CHECKING([for std::move])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <utility>], [[long x = 0; long &&y = std::move(x); (void) y;]])], [ac_cv_std_move=yes], [ac_cv_std_move=no])
+AC_MSG_RESULT([$ac_cv_std_move])
+if test "$ac_cv_std_move" != yes; then
     AC_MSG_ERROR([
 
 The C++ compiler does not appear to understand C++11.
 To fix this problem, try supplying a "CXX" argument to ./configure,
 such as "./configure CXX='c++ -std=gnu++0x'".
-
-========================================================])
+If you are using clang on Mac, ensure the '-stdlib=libc++' option.
+])
 fi
 
 AC_CACHE_CHECK([whether the C++ compiler understands constexpr], [ac_cv_cxx_constexpr], [
@@ -140,18 +149,18 @@ if test "$ac_cv_cxx_constexpr" = yes; then
     AC_DEFINE([HAVE_CXX_CONSTEXPR], [1], [Define if the C++ compiler understands constexpr.])
 fi
 
+AC_CACHE_CHECK([whether the C++ compiler understands noexcept], [ac_cv_cxx_noexcept], [
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int x) noexcept { return x + 1; }]], [[]])],
+	[ac_cv_cxx_noexcept=yes], [ac_cv_cxx_noexcept=no])])
+if test "$ac_cv_cxx_noexcept" = yes; then
+    AC_DEFINE([HAVE_CXX_NOEXCEPT], [1], [Define if the C++ compiler understands noexcept.])
+fi
+
 AC_CACHE_CHECK([whether the C++ compiler understands static_assert], [ac_cv_cxx_static_assert], [
     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[const int f = 2;]], [[static_assert(f == 2, "f should be 2");]])],
 	[ac_cv_cxx_static_assert=yes], [ac_cv_cxx_static_assert=no])])
 if test "$ac_cv_cxx_static_assert" = yes; then
     AC_DEFINE([HAVE_CXX_STATIC_ASSERT], [1], [Define if the C++ compiler understands static_assert.])
-fi
-
-AC_CACHE_CHECK([whether the C++ compiler understands rvalue references], [ac_cv_cxx_rvalue_references], [
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int &) { return 1; } int f(int &&) { return 0; }]], [[return f(int());]])],
-	[ac_cv_cxx_rvalue_references=yes], [ac_cv_cxx_rvalue_references=no])])
-if test "$ac_cv_cxx_rvalue_references" = yes; then
-    AC_DEFINE([HAVE_CXX_RVALUE_REFERENCES], [1], [Define if the C++ compiler understands rvalue references.])
 fi
 
 AC_CACHE_CHECK([whether the C++ compiler understands template alias], [ac_cv_cxx_template_alias], [
@@ -186,20 +195,6 @@ if test $ac_cv_have___has_trivial_copy = yes; then
     AC_DEFINE([HAVE___HAS_TRIVIAL_COPY], [1], [Define if you have the __has_trivial_copy compiler intrinsic.])
 fi
 
-if test "$ac_cv_cxx_rvalue_references" = yes; then
-    AC_MSG_CHECKING([for std::move])
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <utility>], [[long x = 0; long &&y = std::move(x);]])], [ac_cv_std_move=yes], [ac_cv_std_move=no])
-    AC_MSG_RESULT([$ac_cv_std_move])
-    if test "$ac_cv_std_move" != yes; then
-        AC_MSG_ERROR([
-
-The C++ compiler understands C++11, but does not have std::move.
-If you are using clang on Mac, ensure the -stdlib=libc++ option.
-
-========================================================])
-    fi
-fi
-
 AC_CACHE_CHECK([for std::is_trivially_copyable], [ac_cv_have_std_is_trivially_copyable], [
     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <type_traits>], [[return std::is_trivially_copyable<int>::value;]])], [ac_cv_have_std_is_trivially_copyable=yes], [ac_cv_have_std_is_trivially_copyable=no])])
 if test $ac_cv_have_std_is_trivially_copyable = yes; then
@@ -211,6 +206,8 @@ AC_CACHE_CHECK([for std::is_rvalue_reference], [ac_cv_have_std_is_rvalue_referen
 if test $ac_cv_have_std_is_rvalue_reference = yes; then
     AC_DEFINE([HAVE_STD_IS_RVALUE_REFERENCE], [1], [Define if you have the std::is_rvalue_reference template.])
 fi
+
+CXX="$SAVE_CXX"
 
 
 dnl Memory allocator
