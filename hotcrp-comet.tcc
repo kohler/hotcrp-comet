@@ -73,7 +73,7 @@ class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
         : url_(std::move(url)), create_at_(tamer::drecent()),
-          status_at_(0), status_change_at_(0),
+          status_at_(0), status_change_at_(0), pulse_at_(0),
           npoll_(0), nupdate_(0), npollers_(0) {
         if (url_.back() != '/')
             url_ += '/';
@@ -102,6 +102,14 @@ class Site : public tamer::tamed_class {
     }
     inline bool set_status(const String& status) {
         return set_status(std::string(status.data(), status.length()));
+    }
+
+    inline double pulse_at() const {
+        return pulse_at_;
+    }
+    inline void pulse() {
+        pulse_at_ = tamer::drecent();
+        status_change_();
     }
 
     tamed void validate(tamer::event<> done);
@@ -136,6 +144,7 @@ class Site : public tamer::tamed_class {
     double create_at_;
     double status_at_;
     double status_change_at_;
+    double pulse_at_;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
     unsigned long long npoll_;
@@ -373,11 +382,13 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
-        double timeout_at = tamer::drecent() + poll_timeout(timeout);
+        double start_at = tamer::drecent();
+        double timeout_at = start_at + poll_timeout(timeout);
     }
     site.add_poller();
     while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
-           && site.status_may_equal(req_.query("poll")))
+           && site.status_may_equal(req_.query("poll"))
+           && site.pulse_at() < start_at)
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
@@ -400,6 +411,8 @@ void Connection::update_handler() {
     Site& site = make_site(req_.query("conference"));
     site.add_update();
     site.set_status(req_.query("update"));
+    if (!req_.query("pulse").empty())
+        site.pulse();
     res_.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "application/json")
