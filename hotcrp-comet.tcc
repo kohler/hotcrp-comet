@@ -591,6 +591,7 @@ tamed void catch_sigterm() {
 static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
     { "log-file", 0, 0, Clp_ValString, 0 },
+    { "nfiles", 'n', 0, Clp_ValInt, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
     { "update-directory", 0, 0, Clp_ValString, 0 },
@@ -675,6 +676,8 @@ static void driver_error_handler(int, int err, std::string msg) {
 int main(int argc, char** argv) {
     bool fg = false;
     int port = 20444;
+    int nfiles = 0;
+    bool nfiles_set = false;
     const char* pid_filename = nullptr;
     const char* log_filename = nullptr;
     const char* update_directory = nullptr;
@@ -684,7 +687,10 @@ int main(int argc, char** argv) {
         int opt = Clp_Next(clp);
         if (Clp_IsLong(clp, "fg"))
             fg = true;
-        else if (Clp_IsLong(clp, "port"))
+        else if (Clp_IsLong(clp, "nfiles")) {
+            nfiles = clp->val.i;
+            nfiles_set = true;
+        } else if (Clp_IsLong(clp, "port"))
             port = clp->val.i;
         else if (Clp_IsLong(clp, "pid-file"))
             pid_filename = clp->val.s;
@@ -727,6 +733,12 @@ int main(int argc, char** argv) {
 
     if (userarg)
         set_userarg(userarg);
+
+    if (nfiles_set) {
+        int r = tamer::fd::open_limit(nfiles <= 0 ? INT_MAX : nfiles);
+        if (r < nfiles)
+            std::cerr << "hotcrp-comet: limited to " << r << " open files\n";
+    }
     connection_limit = tamer::fd::open_limit();
     if (connection_limit > 100)
         connection_limit -= 20;
