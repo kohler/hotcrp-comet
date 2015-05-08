@@ -9,6 +9,9 @@
 #include <grp.h>
 #include "clp.h"
 #include "json.hh"
+#if __linux__
+# include <sys/inotify.h>
+#endif
 
 #define LOG_ALWAYS 0
 #define LOG_DEBUG 1
@@ -22,6 +25,7 @@ static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
 static tamer::fd pollfd;
 static tamer::fd serverfd;
+static tamer::fd watchfd;
 static unsigned nconnections;
 static unsigned connection_limit;
 static const char* pid_file = nullptr;
@@ -73,7 +77,8 @@ class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
         : url_(std::move(url)), create_at_(tamer::drecent()),
-          status_at_(0), status_change_at_(0), pulse_at_(0),
+          status_at_(0), status_change_at_(0), status_timestamp_(0),
+          pulse_at_(0),
           npoll_(0), nupdate_(0), npollers_(0) {
         if (url_.back() != '/')
             url_ += '/';
@@ -91,18 +96,8 @@ class Site : public tamer::tamed_class {
     }
     inline bool is_valid() const;
     inline bool status_may_equal(const std::string& status) const;
-    bool set_status(const std::string& status) {
-        if (status_ != status) {
-            status_ = status;
-            status_change_at_ = tamer::drecent();
-            status_change_();
-            return true;
-        } else
-            return false;
-    }
-    inline bool set_status(const String& status) {
-        return set_status(std::string(status.data(), status.length()));
-    }
+    static bool status_update_valid(const Json& j);
+    bool set_status(const Json& j, bool is_update);
 
     inline double pulse_at() const {
         return pulse_at_;
@@ -144,6 +139,7 @@ class Site : public tamer::tamed_class {
     double create_at_;
     double status_at_;
     double status_change_at_;
+    double status_timestamp_;
     double pulse_at_;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
@@ -185,6 +181,33 @@ inline bool Site::status_may_equal(const std::string& status) const {
     return !is_valid() || (!status.empty() && status_ == status);
 }
 
+bool Site::status_update_valid(const Json& j) {
+    return j.is_o()
+        && j["ok"]
+        && j["tracker_status"].is_s()
+        && (!j["tracker_status_at"] || j["tracker_status_at"].is_number());
+}
+
+bool Site::set_status(const Json& j, bool is_update) {
+    String status1 = j["tracker_status"].to_s();
+    std::string status(status1.data(), status1.length());
+    double status_timestamp = j["tracker_status_at"].to_d();
+    if (is_update)
+        add_update();
+    if (status_ != status
+        && (!status_timestamp || status_timestamp > status_timestamp_)) {
+        status_ = status;
+        status_change_at_ = tamer::drecent();
+        status_timestamp_ = status_timestamp;
+        status_change_();
+        return true;
+    } else if (j["pulse"]) {
+        pulse();
+        return false;
+    } else
+        return false;
+}
+
 tamed void Site::validate(tamer::event<> done) {
     tvars {
         tamer::http_parser hp(HTTP_RESPONSE);
@@ -224,9 +247,8 @@ tamed void Site::validate(tamer::event<> done) {
     twait { hp.receive(pollfd, tamer::make_event(res)); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
-        && j["ok"]
-        && j["tracker_status"].is_s()) {
-        bool change = set_status(j["tracker_status"].to_s());
+        && status_update_valid(j)) {
+        bool change = set_status(j, false);
         if (change || status() != "off")
             log_msg() << url_ << ": tracker status " << status();
     } else {
@@ -408,11 +430,14 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
 }
 
 void Connection::update_handler() {
-    Site& site = make_site(req_.query("conference"));
-    site.add_update();
-    site.set_status(req_.query("update"));
+    Json j = Json().set("ok", true)
+        .set("tracker_status", req_.query("tracker_status"));
+    if (!req_.query("tracker_status_at").empty())
+        j.set("tracker_status_at", Json::parse(req_.query("tracker_status_at")));
     if (!req_.query("pulse").empty())
-        site.pulse();
+        j.set("pulse", Json::parse(req_.query("pulse")));
+    Site& site = make_site(req_.query("conference"));
+    site.set_status(j, true);
     res_.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "application/json")
@@ -471,7 +496,7 @@ tamed void Connection::handler() {
                     Json j = Json::parse(req_.query("timeout"));
                     poll_handler(j.is_number() ? j.to_d() / 1000. : 0, tamer::make_event());
                 }
-            } else if (!req_.query("update").empty())
+            } else if (!req_.query("tracker_status").empty())
                 update_handler();
         }
         if (!res_.ok() || !hp_.should_keep_alive())
@@ -500,6 +525,62 @@ tamed void listener() {
     }
 }
 
+#if __linux__
+typedef struct inotify_event ievent;
+
+tamed void directory_watcher(const char* update_directory) {
+    tvars {
+        char buf[sizeof(struct inotify_event) + 1 + NAME_MAX];
+        int dirfd;
+        size_t r;
+    }
+    {
+        int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+        if (fd < 0) {
+            std::cerr << "inotify_init: " << strerror(errno) << "\n";
+            exit(1);
+        }
+        dirfd = open(update_directory, O_RDONLY | O_DIRECTORY);
+        if (dirfd < 0) {
+            std::cerr << update_directory << ": " << strerror(errno) << "\n";
+            exit(1);
+        }
+        if (inotify_add_watch(fd, update_directory, IN_CLOSE_WRITE) == -1) {
+            std::cerr << update_directory << ": " << strerror(errno) << "\n";
+            exit(1);
+        }
+        watchfd = tamer::fd(fd);
+    }
+    while (watchfd) {
+        twait { watchfd.read(buf, sizeof(buf), r, tamer::make_event()); }
+        for (size_t off = 0; off < r; ) {
+            ievent* x = reinterpret_cast<ievent*>(&buf[off]);
+            int ffd = openat(dirfd, x->name, O_RDONLY);
+            if (ffd >= 0) {
+                StringAccum sa;
+                ssize_t r;
+                while ((r = read(ffd, sa.reserve(8192), 8192)) > 0)
+                    sa.adjust_length(r);
+                Json j = Json::parse(sa.take_string());
+                if (j["conference"].is_s() && Site::status_update_valid(j)) {
+                    Site& site = make_site(j["conference"].to_s());
+                    site.set_status(j, true);
+                }
+                close(ffd);
+            }
+            unlinkat(dirfd, x->name, 0);
+            off += sizeof(struct inotify_event) + x->len;
+        }
+    }
+    close(dirfd);
+}
+#else
+void directory_watcher(const char*) {
+    std::cerr << "--update-directory is only supported on Linux.\n";
+    exit(1);
+}
+#endif
+
 tamed void catch_sigterm() {
     twait volatile { tamer::at_signal(SIGTERM, tamer::make_event()); }
     exit(1);
@@ -510,6 +591,7 @@ static const Clp_Option options[] = {
     { "log-file", 0, 0, Clp_ValString, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
+    { "update-directory", 0, 0, Clp_ValString, 0 },
     { "user", 'u', 0, Clp_ValString, 0 }
 };
 
@@ -578,6 +660,7 @@ static void create_pid_file(pid_t pid, const char* pid_filename) {
 extern "C" {
 static void exiter() {
     serverfd.close();
+    watchfd.close();
     if (pid_file)
         unlink(pid_file);
 }
@@ -592,6 +675,7 @@ int main(int argc, char** argv) {
     int port = 20444;
     const char* pid_filename = nullptr;
     const char* log_filename = nullptr;
+    const char* update_directory = nullptr;
     String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
     while (1) {
@@ -604,6 +688,8 @@ int main(int argc, char** argv) {
             pid_filename = clp->val.s;
         else if (Clp_IsLong(clp, "log-file"))
             log_filename = clp->val.s;
+        else if (Clp_IsLong(clp, "update-directory"))
+            update_directory = clp->val.s;
         else if (Clp_IsLong(clp, "user"))
             userarg = clp->val.s;
         else if (opt != Clp_Done)
@@ -619,6 +705,8 @@ int main(int argc, char** argv) {
         std::cerr << "listen: " << strerror(-serverfd.error()) << "\n";
         exit(1);
     }
+    if (update_directory)
+        directory_watcher(update_directory);
 
     atexit(exiter);
     listener();
