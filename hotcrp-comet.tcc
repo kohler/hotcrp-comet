@@ -531,7 +531,7 @@ typedef struct inotify_event ievent;
 tamed void directory_watcher(const char* update_directory) {
     tvars {
         char buf[sizeof(struct inotify_event) + 1 + NAME_MAX];
-        int dirfd;
+        int dirfd, e;
         size_t r;
     }
     {
@@ -552,7 +552,9 @@ tamed void directory_watcher(const char* update_directory) {
         watchfd = tamer::fd(fd);
     }
     while (watchfd) {
-        twait { watchfd.read(buf, sizeof(buf), r, tamer::make_event()); }
+        twait { watchfd.read_once(buf, sizeof(buf), r, tamer::make_event(e)); }
+        if (e != 0)
+            log_msg(LOG_ALWAYS) << update_directory << ": " << strerror(-e);
         for (size_t off = 0; off < r; ) {
             ievent* x = reinterpret_cast<ievent*>(&buf[off]);
             int ffd = openat(dirfd, x->name, O_RDONLY);
@@ -562,13 +564,13 @@ tamed void directory_watcher(const char* update_directory) {
                 while ((r = read(ffd, sa.reserve(8192), 8192)) > 0)
                     sa.adjust_length(r);
                 Json j = Json::parse(sa.take_string());
-                if (j["conference"].is_s() && Site::status_update_valid(j)) {
+                if (j && j["conference"].is_s() && Site::status_update_valid(j)) {
                     Site& site = make_site(j["conference"].to_s());
                     site.set_status(j, true);
+                    unlinkat(dirfd, x->name, 0);
                 }
                 close(ffd);
             }
-            unlinkat(dirfd, x->name, 0);
             off += sizeof(struct inotify_event) + x->len;
         }
     }
@@ -720,7 +722,6 @@ int main(int argc, char** argv) {
             exit(1);
         }
         logs = &logf_stream;
-        log_msg(LOG_ALWAYS) << "hotcrp-comet started";
     } else if (fg)
         logs = &std::cerr;
 
@@ -739,6 +740,8 @@ int main(int argc, char** argv) {
     if (pid != getpid())
         exit(0);
 
+    if (log_filename)
+        log_msg(LOG_ALWAYS) << "hotcrp-comet started, pid " << pid;
     tamer::loop();
     tamer::cleanup();
 }
