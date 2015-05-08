@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unordered_map>
 #include <fstream>
+#include <iomanip>
 #include <algorithm>
 #include <pwd.h>
 #include <grp.h>
@@ -94,8 +95,12 @@ class Site : public tamer::tamed_class {
     inline const std::string& status() const {
         return status_;
     }
+    inline double status_timestamp() const {
+        return status_timestamp_;
+    }
     inline bool is_valid() const;
     inline bool status_may_equal(const std::string& status) const;
+
     static bool status_update_valid(const Json& j);
     bool set_status(const Json& j, bool is_update);
 
@@ -200,6 +205,7 @@ bool Site::set_status(const Json& j, bool is_update) {
         status_change_at_ = tamer::drecent();
         status_timestamp_ = status_timestamp;
         status_change_();
+        log_msg() << url_ << ": tracker " << (is_update ? "update " : "status ") << status;
         return true;
     } else if (j["pulse"]) {
         pulse();
@@ -247,11 +253,9 @@ tamed void Site::validate(tamer::event<> done) {
     twait { hp.receive(pollfd, tamer::make_event(res)); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
-        && status_update_valid(j)) {
-        bool change = set_status(j, false);
-        if (change || status() != "off")
-            log_msg() << url_ << ": tracker status " << status();
-    } else {
+        && status_update_valid(j))
+        set_status(j, false);
+    else {
         pollfd.close();
         if (!opened_pollfd) {
             hp.clear();
@@ -417,7 +421,10 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
             site.wait(req_.query("poll"), poll_event_);
         }
     if (!site.status().empty())
-        buf << "{\"tracker_status\":\"" << site.status() << "\",\"ok\":true}";
+        buf << "{\"tracker_status\":\"" << site.status()
+            << "\",\"tracker_status_at\":"
+            << std::fixed << std::setprecision(4) << site.status_timestamp()
+            << ",\"ok\":true}";
     else
         buf << "{\"ok\":false}";
     res_.error(HPE_OK)
