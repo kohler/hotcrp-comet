@@ -99,7 +99,6 @@ class Site : public tamer::tamed_class {
         return status_timestamp_;
     }
     inline bool is_valid() const;
-    inline bool status_may_equal(const std::string& status) const;
 
     static bool status_update_valid(const Json& j);
     bool set_status(const Json& j, bool is_update);
@@ -114,11 +113,12 @@ class Site : public tamer::tamed_class {
 
     tamed void validate(tamer::event<> done);
 
-    void wait(const std::string& status, tamer::event<> done) {
-        if (is_valid() && !status_may_equal(status))
-            done();
-        else if (is_valid())
+    void wait(const std::string& status, double status_timestamp,
+              tamer::event<> done) {
+        if (is_valid() && status_ == status)
             status_change_ += std::move(done);
+        else if (is_valid() && status_timestamp_ >= status_timestamp)
+            done();
         else
             validate(std::move(done));
     }
@@ -182,10 +182,6 @@ inline bool Site::is_valid() const {
     return status_at_ && tamer::drecent() - status_at_ < to;
 }
 
-inline bool Site::status_may_equal(const std::string& status) const {
-    return !is_valid() || (!status.empty() && status_ == status);
-}
-
 bool Site::status_update_valid(const Json& j) {
     return j.is_o()
         && j["ok"]
@@ -221,12 +217,6 @@ tamed void Site::validate(tamer::event<> done) {
         tamer::fd cfd;
         Json j;
         bool opened_pollfd = false;
-    }
-
-    // is status already available?
-    if (is_valid()) {
-        done();
-        return;
     }
 
     // is status already being checked?
@@ -408,17 +398,28 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
+        std::string poll_status = req_.query("poll");
         double start_at = tamer::drecent();
         double timeout_at = start_at + poll_timeout(timeout);
+        double status_timestamp = 0;
     }
+    if (!req_.query("tracker_status_at").empty()) {
+        Json j = Json::parse(req_.query("tracker_status_at"));
+        if (j.is_number())
+            status_timestamp = j.to_d();
+    }
+    if (poll_status.empty())
+        poll_status = site.status();
     site.add_poller();
     while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
-           && site.status_may_equal(req_.query("poll"))
+           && (!site.is_valid()
+               || site.status() == poll_status
+               || site.status_timestamp() < status_timestamp)
            && site.pulse_at() < start_at)
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
-            site.wait(req_.query("poll"), poll_event_);
+            site.wait(poll_status, status_timestamp, poll_event_);
         }
     if (!site.status().empty())
         buf << "{\"tracker_status\":\"" << site.status()
