@@ -493,7 +493,8 @@ tamed void Connection::handler() {
         res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
             .header("Access-Control-Allow-Credentials", "true")
-            .header("Access-Control-Allow-Headers", "Accept-Encoding");
+            .header("Access-Control-Allow-Headers", "Accept-Encoding")
+            .header("Expires", "Mon, 26 Jul 1997 05:00:00 GMT");
         if (req_.url_path() == "/hotcrp_comet_status")
             hotcrp_comet_status_handler(req_, res_);
         else if (check_conference(req_.query("conference"), confurl)) {
