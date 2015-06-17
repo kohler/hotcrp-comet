@@ -14,10 +14,11 @@
 # include <sys/inotify.h>
 #endif
 
-#define LOG_ALWAYS 0
-#define LOG_DEBUG 1
+#define LOG_ERROR 0
+#define LOG_NORMAL 1
+#define LOG_DEBUG 2
 
-#define MAX_LOGLEVEL LOG_ALWAYS
+#define MAX_LOGLEVEL LOG_DEBUG
 
 static double connection_timeout = 20;
 static double site_validate_timeout = 120;
@@ -31,18 +32,33 @@ static unsigned nconnections;
 static unsigned connection_limit;
 static const char* pid_file = nullptr;
 static std::ostream* logs;
+static std::ostream* logerrs;
 static int loglevel;
+static std::vector<std::string> startup_fds;
+
+#define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
 class log_msg {
  public:
-    log_msg(int msglevel = 0)
-        : logf_(logs && msglevel <= loglevel && msglevel <= MAX_LOGLEVEL ? logs : 0) {
+    log_msg(int msglevel = LOG_NORMAL)
+        : msglevel_(msglevel) {
+        if (logs && msglevel <= loglevel && msglevel <= MAX_LOGLEVEL)
+            logf_ = logs;
+        else if (msglevel == LOG_ERROR)
+            logf_ = logerrs;
+        else
+            logf_ = nullptr;
         if (logf_)
             add_prefix();
     }
     ~log_msg() {
-        if (logf_)
-            *logf_ << stream_.str() << std::endl;
+        if (logf_) {
+            std::string str = stream_.str();
+            if (logerrs && msglevel_ == LOG_ERROR)
+                *logerrs << str.substr(str.find(']') + 2) << std::endl;
+            if (logf_ && (msglevel_ != LOG_ERROR || logf_ != logerrs))
+                *logf_ << str << std::endl;
+        }
     }
     template <typename T> log_msg& operator<<(T&& x) {
         if (logf_)
@@ -50,12 +66,11 @@ class log_msg {
         return *this;
     }
  private:
+    int msglevel_;
     std::ostream* logf_;
     std::stringstream stream_;
     void add_prefix();
 };
-
-#define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
 std::string timestamp_string(double at) {
     char buf[1024];
@@ -231,6 +246,7 @@ tamed void Site::validate(tamer::event<> done) {
     if (!pollfd || pollfd.socket_error()) {
         opened_pollfd = true;
         twait { tamer::tcp_connect(80, tamer::make_event(pollfd)); }
+        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": pollfd";
     }
     req.method(HTTP_GET)
         .url(path_)
@@ -247,14 +263,17 @@ tamed void Site::validate(tamer::event<> done) {
         set_status(j, false);
     else {
         pollfd.close();
+        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": close";
         if (!opened_pollfd) {
             hp.clear();
             goto reopen_pollfd;
         }
         log_msg() << url_ << ": bad tracker status " << res.body();
     }
-    if (!hp.should_keep_alive())
+    if (!hp.should_keep_alive() && pollfd) {
         pollfd.close();
+        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": close";
+    }
     status_at_ = tamer::drecent();
     status_check_();
 }
@@ -289,7 +308,6 @@ class Connection : public tamer::tamed_class {
     tamer::http_parser hp_;
     tamer::http_message req_;
     tamer::http_message res_;
-    int cfd_value_;
     double created_at_;
     tamer::event<> poll_event_;
     int state_;
@@ -311,12 +329,13 @@ Connection* Connection::state_head[3];
 
 Connection::Connection(tamer::fd cfd)
     : cfd_(std::move(cfd)), hp_(HTTP_REQUEST),
-      cfd_value_(cfd_.value()), created_at_(tamer::drecent()), state_(-1) {
-    assert(cfd_.value() >= 0);
-    if (all.size() <= (unsigned) cfd_.value())
-        all.resize(cfd_.value() + 1, nullptr);
-    assert(!all[cfd_.value()]);
-    all[cfd_.value()] = this;
+      created_at_(tamer::drecent()), state_(-1) {
+    assert(cfd_.valid());
+    log_msg(LOG_DEBUG) << "fd " << cfd_.fdnum() << ": connection";
+    if (all.size() <= (unsigned) cfd_.fdnum())
+        all.resize(cfd_.fdnum() + 1, nullptr);
+    assert(!all[cfd_.fdnum()]);
+    all[cfd_.fdnum()] = this;
     ++nconnections;
 }
 
@@ -328,7 +347,8 @@ Connection* Connection::add(tamer::fd cfd) {
 
 Connection::~Connection() {
     cfd_.close();
-    all[cfd_value_] = nullptr;
+    log_msg(LOG_DEBUG) << "fd " << cfd_.recent_fdnum() << ": close";
+    all[cfd_.recent_fdnum()] = nullptr;
     --nconnections;
     set_state(-1);
 }
@@ -377,7 +397,7 @@ void Connection::clear_one(Connection* dont_clear) {
 
 Json Connection::status_json() const {
     static const char* stati[] = {"request", "poll", "response"};
-    Json j = Json().set("fd", cfd_.value())
+    Json j = Json().set("fd", cfd_.fdnum())
         .set("age", (unsigned long) (tamer::drecent() - created_at_));
     if (state_ >= 0)
         j.set("state", stati[state_]);
@@ -522,8 +542,15 @@ tamed void Connection::handler() {
     delete this;
 }
 
+static void record_startup_fd(int fd, const char* msg) {
+    std::ostringstream buf;
+    buf << "fd " << fd << ": " << msg;
+    startup_fds.push_back(buf.str());
+}
+
 tamed void listener() {
     tvars { tamer::fd cfd; }
+    record_startup_fd(serverfd.fdnum(), "listen");
     while (serverfd) {
         twait { serverfd.accept(tamer::make_event(cfd)); }
         if (cfd) {
@@ -546,24 +573,26 @@ tamed void directory_watcher(const char* update_directory) {
     {
         int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
         if (fd < 0) {
-            std::cerr << "inotify_init: " << strerror(errno) << "\n";
+            log_msg(LOG_ERROR) << "inotify_init: " << strerror(errno);
             exit(1);
         }
         dirfd = open(update_directory, O_RDONLY | O_DIRECTORY);
         if (dirfd < 0) {
-            std::cerr << update_directory << ": " << strerror(errno) << "\n";
+            log_msg(LOG_ERROR) << update_directory << ": " << strerror(errno);
             exit(1);
         }
         if (inotify_add_watch(fd, update_directory, IN_CLOSE_WRITE) == -1) {
-            std::cerr << update_directory << ": " << strerror(errno) << "\n";
+            log_msg(LOG_ERROR) << update_directory << ": " << strerror(errno);
             exit(1);
         }
         watchfd = tamer::fd(fd);
     }
+    record_startup_fd(watchfd.fdnum(), "inotify");
+    record_startup_fd(dirfd, "watch directory");
     while (watchfd) {
         twait { watchfd.read_once(buf, sizeof(buf), r, tamer::make_event(e)); }
         if (e != 0)
-            log_msg(LOG_ALWAYS) << update_directory << ": " << strerror(-e);
+            log_msg() << update_directory << ": " << strerror(-e);
         for (size_t off = 0; off < r; ) {
             ievent* x = reinterpret_cast<ievent*>(&buf[off]);
             int ffd = openat(dirfd, x->name, O_RDONLY);
@@ -584,10 +613,11 @@ tamed void directory_watcher(const char* update_directory) {
         }
     }
     close(dirfd);
+    log_msg(LOG_DEBUG) << "fd " << dirfd << ": close";
 }
 #else
 void directory_watcher(const char*) {
-    std::cerr << "--update-directory is only supported on Linux.\n";
+    log_msg(LOG_ERROR) << "--update-directory is only supported on Linux.";
     exit(1);
 }
 #endif
@@ -599,7 +629,9 @@ tamed void catch_sigterm() {
 
 static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
+    { "log", 0, 0, Clp_ValString, 0 },
     { "log-file", 0, 0, Clp_ValString, 0 },
+    { "log-level", 0, 0, Clp_ValInt, 0 },
     { "nfiles", 'n', 0, Clp_ValInt, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
@@ -616,7 +648,7 @@ static pid_t maybe_fork(bool dofork) {
     if (dofork) {
         pid_t pid = fork();
         if (pid == -1) {
-            std::cerr << "fork: " << strerror(errno) << "\n";
+            log_msg(LOG_ERROR) << "fork: " << strerror(errno);
             exit(1);
         } else if (pid > 0)
             return pid;
@@ -625,6 +657,7 @@ static pid_t maybe_fork(bool dofork) {
         close(STDERR_FILENO);
         setpgid(0, 0);
         signal(SIGHUP, SIG_IGN);
+        logerrs = nullptr;
     }
     return getpid();
 }
@@ -640,15 +673,15 @@ static void set_userarg(const String& userarg) {
     struct passwd* pwent = nullptr;
     struct group* grent = nullptr;
     if (user && !(pwent = getpwnam(user.c_str())))
-        std::cerr << "user " << user << " does not exist\n";
+        log_msg(LOG_ERROR) << "user " << user << " does not exist";
     if (group && !(grent = getgrnam(group.c_str())))
-        std::cerr << "group " << group << " does not exist\n";
+        log_msg(LOG_ERROR) << "group " << group << " does not exist";
     if (grent && setgid(grent->gr_gid) != 0) {
-        std::cerr << "setgid: " << strerror(errno) << "\n";
+        log_msg(LOG_ERROR) << "setgid: " << strerror(errno);
         grent = nullptr;
     }
     if (pwent && setuid(pwent->pw_uid) != 0) {
-        std::cerr << "setuid: " << strerror(errno) << "\n";
+        log_msg(LOG_ERROR) << "setuid: " << strerror(errno);
         pwent = nullptr;
     }
     if ((user && !pwent) || (group && !grent))
@@ -658,7 +691,7 @@ static void set_userarg(const String& userarg) {
 static void create_pid_file(pid_t pid, const char* pid_filename) {
     int pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
     if (pidfd < 0) {
-        std::cerr << pid_filename << ": " << strerror(errno) << "\n";
+        log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
         exit(1);
     }
     pid_file = pid_filename;
@@ -703,8 +736,10 @@ int main(int argc, char** argv) {
             port = clp->val.i;
         else if (Clp_IsLong(clp, "pid-file"))
             pid_filename = clp->val.s;
-        else if (Clp_IsLong(clp, "log-file"))
+        else if (Clp_IsLong(clp, "log-file") || Clp_IsLong(clp, "log"))
             log_filename = clp->val.s;
+        else if (Clp_IsLong(clp, "log-level"))
+            loglevel = std::max(0, std::min(MAX_LOGLEVEL, clp->val.i));
         else if (Clp_IsLong(clp, "update-directory"))
             update_directory = clp->val.s;
         else if (Clp_IsLong(clp, "user"))
@@ -717,16 +752,7 @@ int main(int argc, char** argv) {
 
     tamer::initialize();
     tamer::driver::main->set_error_handler(driver_error_handler);
-    serverfd = tamer::tcp_listen(port);
-    if (!serverfd) {
-        std::cerr << "listen: " << strerror(-serverfd.error()) << "\n";
-        exit(1);
-    }
-    if (update_directory)
-        directory_watcher(update_directory);
-
     atexit(exiter);
-    listener();
     catch_sigterm();
 
     std::ofstream logf_stream;
@@ -739,6 +765,18 @@ int main(int argc, char** argv) {
         logs = &logf_stream;
     } else if (fg)
         logs = &std::cerr;
+    if (logs != &std::cerr)
+        logerrs = &std::cerr;
+
+    serverfd = tamer::tcp_listen(port);
+    if (!serverfd) {
+        log_msg(LOG_ERROR) << "listen: " << strerror(-serverfd.error());
+        exit(1);
+    }
+    listener();
+
+    if (update_directory)
+        directory_watcher(update_directory);
 
     if (userarg)
         set_userarg(userarg);
@@ -746,7 +784,7 @@ int main(int argc, char** argv) {
     if (nfiles_set) {
         int r = tamer::fd::open_limit(nfiles <= 0 ? INT_MAX : nfiles);
         if (r < nfiles)
-            std::cerr << "hotcrp-comet: limited to " << r << " open files\n";
+            log_msg(LOG_ERROR) << "hotcrp-comet: limited to " << r << " open files";
     }
     connection_limit = tamer::fd::open_limit();
     if (connection_limit > 100)
@@ -760,9 +798,10 @@ int main(int argc, char** argv) {
         create_pid_file(pid, pid_filename);
     if (pid != getpid())
         exit(0);
+    log_msg() << "hotcrp-comet started, pid " << pid;
+    for (auto m : startup_fds)
+        log_msg(LOG_DEBUG) << m;
 
-    if (log_filename)
-        log_msg(LOG_ALWAYS) << "hotcrp-comet started, pid " << pid;
     tamer::loop();
     tamer::cleanup();
 }
