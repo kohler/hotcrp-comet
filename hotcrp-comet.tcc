@@ -281,7 +281,7 @@ tamed void Site::validate(tamer::event<> done) {
     }
     status_at_ = tamer::drecent();
     status_check_();
-    pollfds.push_back(std::move(cfd));
+    pollfds.push_front(std::move(cfd));
 }
 
 bool check_conference(std::string arg, tamer::http_message& conf_m) {
