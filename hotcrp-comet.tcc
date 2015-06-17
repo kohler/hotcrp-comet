@@ -1,6 +1,7 @@
 // -*- mode: c++; c-basic-offset: 4 -*-
 #include <tamer/tamer.hh>
 #include <tamer/http.hh>
+#include <tamer/channel.hh>
 #include <fcntl.h>
 #include <unordered_map>
 #include <fstream>
@@ -19,13 +20,14 @@
 #define LOG_DEBUG 2
 
 #define MAX_LOGLEVEL LOG_DEBUG
+#define MAX_NPOLLFDS 5
 
 static double connection_timeout = 20;
 static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
-static tamer::fd pollfd;
+static tamer::channel<tamer::fd> pollfds;
 static tamer::fd serverfd;
 static tamer::fd watchfd;
 static unsigned nconnections;
@@ -242,40 +244,44 @@ tamed void Site::validate(tamer::event<> done) {
             return;
     }
 
+    // get a polling file descriptor
+    twait { pollfds.pop_front(tamer::make_event(cfd)); }
+
  reopen_pollfd:
-    if (!pollfd || pollfd.socket_error()) {
+    if (!cfd || cfd.socket_error()) {
         opened_pollfd = true;
-        twait { tamer::tcp_connect(80, tamer::make_event(pollfd)); }
-        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": pollfd";
+        twait { tamer::tcp_connect(80, tamer::make_event(cfd)); }
+        log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": pollfd";
     }
     req.method(HTTP_GET)
         .url(path_)
         .header("Host", host_)
         .header("Connection", "keep-alive");
-    twait { tamer::http_parser::send_request(pollfd, req,
+    twait { tamer::http_parser::send_request(cfd, req,
                                              tamer::make_event()); }
 
     // parse response
-    twait { hp.receive(pollfd, tamer::make_event(res)); }
+    twait { hp.receive(cfd, tamer::make_event(res)); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
         && status_update_valid(j))
         set_status(j, false);
     else {
-        pollfd.close();
-        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": close";
+        cfd.close();
+        log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
         if (!opened_pollfd) {
             hp.clear();
             goto reopen_pollfd;
         }
         log_msg() << url_ << ": bad tracker status " << res.body();
     }
-    if (!hp.should_keep_alive() && pollfd) {
-        pollfd.close();
-        log_msg(LOG_DEBUG) << "fd " << pollfd.recent_fdnum() << ": close";
+    if (!hp.should_keep_alive() && cfd) {
+        cfd.close();
+        log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
     }
     status_at_ = tamer::drecent();
     status_check_();
+    pollfds.push_back(std::move(cfd));
 }
 
 bool check_conference(std::string arg, tamer::http_message& conf_m) {
@@ -801,6 +807,8 @@ int main(int argc, char** argv) {
     log_msg() << "hotcrp-comet started, pid " << pid;
     for (auto m : startup_fds)
         log_msg(LOG_DEBUG) << m;
+    while (pollfds.size() != MAX_NPOLLFDS)
+        pollfds.push_back(tamer::fd());
 
     tamer::loop();
     tamer::cleanup();
