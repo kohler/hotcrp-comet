@@ -261,7 +261,7 @@ tamed void Site::validate(tamer::event<> done) {
                                              tamer::make_event()); }
 
     // parse response
-    twait { hp.receive(cfd, tamer::make_event(res)); }
+    twait { hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res))); }
     if (hp.ok() && res.ok()
         && (j = Json::parse(res.body()))
         && status_update_valid(j))
