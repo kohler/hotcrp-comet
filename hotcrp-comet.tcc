@@ -800,10 +800,10 @@ int main(int argc, char** argv) {
 
     pid_t pid = maybe_fork(!fg);
 
-    if (pid_filename)
-        create_pid_file(pid, pid_filename);
     if (pid != getpid())
         exit(0);
+    if (pid_filename)
+        create_pid_file(pid, pid_filename);
     log_msg() << "hotcrp-comet started, pid " << pid;
     for (auto m : startup_fds)
         log_msg(LOG_DEBUG) << m;
