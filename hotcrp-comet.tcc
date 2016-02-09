@@ -515,14 +515,17 @@ tamed void Connection::handler() {
         req_.error(HPE_PAUSED);
         set_state(s_request);
         twait { hp_.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
-        if (!hp_.ok() || !req_.ok())
+        if (!hp_.ok() || !req_.ok()) {
+            if (!hp_.ok() && hp_.error() != HPE_INVALID_EOF_STATE)
+                log_msg(LOG_DEBUG) << "fd " << cfd_.recent_fdnum() << ": request fail " << http_errno_name(hp_.error());
             break;
+        }
         res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
             .header("Access-Control-Allow-Credentials", "true")
             .header("Access-Control-Allow-Headers", "Accept-Encoding")
             .header("Expires", "Mon, 26 Jul 1997 05:00:00 GMT");
-        if (req_.url_path() == "/hotcrp_comet_status")
+        if (req_.url_path() == "/status")
             hotcrp_comet_status_handler(req_, res_);
         else if (check_conference(req_.query("conference"), confurl)) {
             if (!req_.query("poll").empty()) {
