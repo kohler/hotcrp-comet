@@ -440,7 +440,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
            && (!site.is_valid()
                || site.status() == poll_status
-               || site.status_timestamp() < status_timestamp)
+               || (site.status_timestamp() && site.status_timestamp() < status_timestamp))
            && site.pulse_at() < start_at)
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
