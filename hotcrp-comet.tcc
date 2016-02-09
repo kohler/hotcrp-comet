@@ -273,7 +273,10 @@ tamed void Site::validate(tamer::event<> done) {
             hp.clear();
             goto reopen_pollfd;
         }
-        log_msg() << url_ << ": bad tracker status " << res.body();
+        if (!hp.ok())
+            log_msg() << "read " << url_ << ": error " << http_errno_name(hp.error());
+        else
+            log_msg() << "read " << url_ << ": bad tracker status " << res.body();
     }
     if (!hp.should_keep_alive() && cfd) {
         cfd.close();
