@@ -68,6 +68,9 @@ class String_generic {
         return hashcode(first, last - first);
     }
     static long to_i(const char* first, const char* last);
+    static char upper_hex_nibble(int n) {
+        return n + (n > 9 ? 'A' - 10 : '0');
+    }
 };
 
 template <typename T>
@@ -84,6 +87,9 @@ class String_base {
         return static_cast<const T*>(this)->data();
     }
     int length() const {
+        return static_cast<const T*>(this)->length();
+    }
+    int size() const {
         return static_cast<const T*>(this)->length();
     }
 
@@ -548,8 +554,12 @@ typename String_base<T>::const_iterator String_base<T>::encode_json_partial(E& e
             enc << (char) c;
             break;
         default: { // c is a control character, 0x2028, or 0x2029
-            char* x = enc.reserve(5);
-            snprintf(x, 5, "u%04X", c);
+            char* x = enc.extend(5);
+            *x++ = 'u';
+            *x++ = String_generic::upper_hex_nibble(c >> 12);
+            *x++ = String_generic::upper_hex_nibble((c >> 8) & 0xF);
+            *x++ = String_generic::upper_hex_nibble((c >> 4) & 0xF);
+            *x++ = String_generic::upper_hex_nibble(c & 0xF);
             if (c > 255)        // skip rest of encoding of U+202[89]
                 s += 2;
             break;
@@ -634,7 +644,10 @@ void String_base<T>::encode_uri_component(E& enc) const {
         if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
             continue;
         enc.append(last, s);
-        snprintf(enc.reserve(3), 3, "%02X", c);
+        char* x = enc.extend(3);
+        *x++ = '%';
+        *x++ = String_generic::upper_hex_nibble(c >> 4);
+        *x++ = String_generic::upper_hex_nibble(c & 0xF);
         last = s + 1;
     }
     enc.append(last, end);
