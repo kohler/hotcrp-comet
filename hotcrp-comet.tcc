@@ -37,6 +37,7 @@ static std::ostream* logs;
 static std::ostream* logerrs;
 static int loglevel;
 static std::vector<std::string> startup_fds;
+static String update_token;
 
 #define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
@@ -104,6 +105,8 @@ class Site : public tamer::tamed_class {
         req.url(url_);
         host_ = req.url_host_port();
         path_ = req.url_path() + "api.php?fn=trackerstatus";
+        if (update_token)
+            path_ += "&token=" + std::string(update_token.encode_uri_component());
     }
 
     inline const std::string& url() const {
@@ -202,6 +205,7 @@ inline bool Site::is_valid() const {
 bool Site::status_update_valid(const Json& j) {
     return j.is_o()
         && j["ok"]
+        && (update_token.empty() || j["token"] == update_token)
         && j["tracker_status"].is_s()
         && (!j["tracker_status_at"] || j["tracker_status_at"].is_number());
 }
@@ -262,9 +266,12 @@ tamed void Site::validate(tamer::event<> done) {
 
     // parse response
     twait { hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res))); }
-    if (hp.ok() && res.ok()
-        && (j = Json::parse(res.body()))
-        && status_update_valid(j))
+    j = Json();
+    if (hp.ok() && res.ok())
+        j = Json::parse(res.body());
+    if (j.is_o() && update_token)
+        j.set("token", update_token); // always trust response
+    if (status_update_valid(j))
         set_status(j, false);
     else {
         cfd.close();
@@ -473,13 +480,20 @@ void Connection::update_handler() {
         j.set("tracker_status_at", Json::parse(req_.query("tracker_status_at")));
     if (!req_.query("pulse").empty())
         j.set("pulse", Json::parse(req_.query("pulse")));
+    if (!req_.query("token").empty())
+        j.set("token", req_.query("token"));
+    Json result;
     Site& site = make_site(req_.query("conference"));
-    site.set_status(j, true);
+    if (Site::status_update_valid(j)) {
+        site.set_status(j, true);
+        result.set("ok", true);
+    } else
+        result.set("ok", false).set("error", "invalid status update");
     res_.error(HPE_OK)
         .date_header("Date", tamer::recent().tv_sec)
         .header("Content-Type", "application/json")
         .header("Connection", "close")
-        .body("{\"ok\":true}");
+        .body(result.unparse());
 }
 
 void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
@@ -647,6 +661,7 @@ static const Clp_Option options[] = {
     { "nfiles", 'n', 0, Clp_ValInt, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
+    { "token", 't', 0, Clp_ValString, 0 },
     { "update-directory", 0, 0, Clp_ValString, 0 },
     { "user", 'u', 0, Clp_ValString, 0 }
 };
@@ -752,6 +767,8 @@ int main(int argc, char** argv) {
             log_filename = clp->val.s;
         else if (Clp_IsLong(clp, "log-level"))
             loglevel = std::max(0, std::min(MAX_LOGLEVEL, clp->val.i));
+        else if (Clp_IsLong(clp, "token"))
+            update_token = clp->val.s;
         else if (Clp_IsLong(clp, "update-directory"))
             update_directory = clp->val.s;
         else if (Clp_IsLong(clp, "user"))
