@@ -325,6 +325,8 @@ class Connection : public tamer::tamed_class {
     tamer::http_parser hp_;
     tamer::http_message req_;
     tamer::http_message res_;
+    Json resj_;
+    int resj_indent_;
     double created_at_;
     tamer::event<> poll_event_;
     int state_;
@@ -458,17 +460,11 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
             status_seq = 0;
         }
     if (!site.status().empty())
-        buf << "{\"tracker_status\":\"" << site.status()
-            << "\",\"tracker_status_at\":"
-            << std::fixed << std::setprecision(4) << site.status_seq()
-            << ",\"ok\":true}";
+        resj_.set("ok", true).set("tracker_status", site.status())
+            .set("tracker_status_at", site.status_seq());
     else
-        buf << "{\"ok\":false}";
-    res_.error(HPE_OK)
-        .date_header("Date", tamer::recent().tv_sec)
-        .header("Content-Type", "application/json")
-        .header("Connection", "close")
-        .body(buf.str());
+        resj_.set("ok", false);
+    hp_.clear_should_keep_alive();
     site.resolve_poller();
     done();
 }
@@ -482,22 +478,17 @@ void Connection::update_handler() {
         j.set("pulse", Json::parse(req_.query("pulse")));
     if (!req_.query("token").empty())
         j.set("token", req_.query("token"));
-    Json result;
     Site& site = make_site(req_.query("conference"));
     if (Site::status_update_valid(j)) {
         site.set_status(j, true);
-        result.set("ok", true);
+        resj_.set("ok", true);
     } else
-        result.set("ok", false).set("error", "invalid status update");
-    res_.error(HPE_OK)
-        .date_header("Date", tamer::recent().tv_sec)
-        .header("Content-Type", "application/json")
-        .header("Connection", "close")
-        .body(result.unparse());
+        resj_.set("ok", false).set("error", "invalid status update");
+    hp_.clear_should_keep_alive();
 }
 
-void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res) {
-    Json j = Json().set("at", tamer::drecent())
+void hotcrp_comet_status_handler(Json& resj) {
+    resj.set("at", tamer::drecent())
         .set("at_time", timestamp_string(tamer::drecent()))
         .set("nconnections", nconnections)
         .set("connection_limit", connection_limit);
@@ -505,7 +496,7 @@ void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res)
     Json sitesj = Json();
     for (auto it = sites.begin(); it != sites.end(); ++it)
         sitesj[it->first] = it->second.status_json();
-    j.set("sites", sitesj);
+    resj.set("sites", sitesj);
 
     Json connj = Json();
     for (auto it = Connection::all.begin(); it != Connection::all.end(); ++it)
@@ -514,12 +505,7 @@ void hotcrp_comet_status_handler(tamer::http_message&, tamer::http_message& res)
     std::sort(connj.abegin(), connj.aend(), [](const Json& a, const Json& b) {
             return a.get("age").as_d() > b.get("age").as_d();
         });
-    j.set("connections", connj);
-
-    res.error(HPE_OK)
-        .date_header("Date", tamer::recent().tv_sec)
-        .header("Content-Type", "application/json")
-        .body(j.unparse(Json::indent_depth(2)));
+    resj.set("connections", connj);
 }
 
 tamed void Connection::handler() {
@@ -542,9 +528,12 @@ tamed void Connection::handler() {
             .header("Access-Control-Allow-Credentials", "true")
             .header("Access-Control-Allow-Headers", "Accept-Encoding")
             .header("Expires", "Mon, 26 Jul 1997 05:00:00 GMT");
-        if (req_.url_path() == "/status")
-            hotcrp_comet_status_handler(req_, res_);
-        else if (check_conference(req_.query("conference"), confurl)) {
+        resj_.clear();
+        resj_indent_ = 0;
+        if (req_.url_path() == "/status") {
+            hotcrp_comet_status_handler(resj_);
+            resj_indent_ = 2;
+        } else if (check_conference(req_.query("conference"), confurl)) {
             if (!req_.query("poll").empty()) {
                 set_state(s_poll);
                 twait volatile {
@@ -553,11 +542,15 @@ tamed void Connection::handler() {
                 }
             } else if (!req_.query("tracker_status").empty())
                 update_handler();
-        }
-        if (!res_.ok() || !hp_.should_keep_alive())
+        } else
+            resj_.set("ok", false).set("error", "missing `conference`");
+        res_.error(HPE_OK).date_header("Date", tamer::recent().tv_sec)
+            .header("Content-Type", "application/json");
+        if (resj_["ok"] || !hp_.should_keep_alive())
             res_.header("Connection", "close");
-        if (!res_.ok())
-            res_.status_code(503);
+        // if (!res_.ok())
+        //    res_.status_code(503);
+        res_.body(resj_.unparse(Json::indent_depth(resj_indent_)));
         set_state(s_response);
         twait { hp_.send_response(cfd_, res_, tamer::make_event()); }
         if (!hp_.should_keep_alive())
