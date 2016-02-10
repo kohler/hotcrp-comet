@@ -95,7 +95,7 @@ class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
         : url_(std::move(url)), create_at_(tamer::drecent()),
-          status_at_(0), status_change_at_(0), status_timestamp_(0),
+          status_at_(0), status_change_at_(0), status_seq_(0),
           pulse_at_(0),
           npoll_(0), nupdate_(0), npollers_(0) {
         if (url_.back() != '/')
@@ -112,8 +112,8 @@ class Site : public tamer::tamed_class {
     inline const std::string& status() const {
         return status_;
     }
-    inline double status_timestamp() const {
-        return status_timestamp_;
+    inline double status_seq() const {
+        return status_seq_;
     }
     inline bool is_valid() const;
 
@@ -130,11 +130,11 @@ class Site : public tamer::tamed_class {
 
     tamed void validate(tamer::event<> done);
 
-    void wait(const std::string& status, double status_timestamp,
+    void wait(const std::string& status, double status_seq,
               tamer::event<> done) {
         if (is_valid() && status_ == status)
             status_change_ += std::move(done);
-        else if (is_valid() && status_timestamp_ >= status_timestamp)
+        else if (is_valid() && status_seq_ >= status_seq)
             done();
         else
             validate(std::move(done));
@@ -161,7 +161,7 @@ class Site : public tamer::tamed_class {
     double create_at_;
     double status_at_;
     double status_change_at_;
-    double status_timestamp_;
+    double status_seq_;
     double pulse_at_;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
@@ -209,14 +209,14 @@ bool Site::status_update_valid(const Json& j) {
 bool Site::set_status(const Json& j, bool is_update) {
     String status1 = j["tracker_status"].to_s();
     std::string status(status1.data(), status1.length());
-    double status_timestamp = j["tracker_status_at"].to_d();
+    double status_seq = j["tracker_status_at"].to_d();
     if (is_update)
         add_update();
     if (status_ != status
-        && (!status_timestamp || status_timestamp > status_timestamp_)) {
+        && (!status_seq || status_seq > status_seq_)) {
         status_ = status;
         status_change_at_ = tamer::drecent();
-        status_timestamp_ = status_timestamp;
+        status_seq_ = status_seq;
         status_change_();
         log_msg() << url_ << ": tracker " << (is_update ? "update " : "status ") << status;
         return true;
@@ -277,6 +277,7 @@ tamed void Site::validate(tamer::event<> done) {
             log_msg() << "read " << url_ << ": error " << http_errno_name(hp.error());
         else
             log_msg() << "read " << url_ << ": bad tracker status " << res.body();
+        set_status(Json(), false);
     }
     if (!hp.should_keep_alive() && cfd) {
         cfd.close();
@@ -430,30 +431,29 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         std::string poll_status = req_.query("poll");
         double start_at = tamer::drecent();
         double timeout_at = start_at + poll_timeout(timeout);
-        double status_timestamp = 0;
+        double status_seq = 1;
     }
     if (!req_.query("tracker_status_at").empty()) {
         Json j = Json::parse(req_.query("tracker_status_at"));
         if (j.is_number())
-            status_timestamp = j.to_d();
+            status_seq = j.to_d();
     }
     if (poll_status.empty())
         poll_status = site.status();
     site.add_poller();
     while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
-           && (!site.is_valid()
-               || site.status() == poll_status
-               || (site.status_timestamp() && site.status_timestamp() < status_timestamp))
+           && (site.status() == poll_status || site.status_seq() < status_seq)
            && site.pulse_at() < start_at)
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
-            site.wait(poll_status, status_timestamp, poll_event_);
+            site.wait(poll_status, status_seq, poll_event_);
+            status_seq = 0;
         }
     if (!site.status().empty())
         buf << "{\"tracker_status\":\"" << site.status()
             << "\",\"tracker_status_at\":"
-            << std::fixed << std::setprecision(4) << site.status_timestamp()
+            << std::fixed << std::setprecision(4) << site.status_seq()
             << ",\"ok\":true}";
     else
         buf << "{\"ok\":false}";
