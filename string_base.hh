@@ -373,6 +373,8 @@ class String_base {
     void encode_base64(E& e, bool pad = false) const;
     template <typename E>
     bool decode_base64(E& e) const;
+    template <typename E>
+    void encode_uri_component(E& e) const;
 
     /** @brief Return this string as a std::string. */
     inline operator std::string() const {
@@ -621,6 +623,21 @@ bool String_base<T>::decode_base64(E& enc) const {
         return false;
     enc.set_end(out);
     return true;
+}
+
+template <typename T> template <typename E>
+void String_base<T>::encode_uri_component(E& enc) const {
+    const char *last = this->begin(), *end = this->end();
+    enc.reserve(end - last);
+    for (const char *s = last; s != end; ++s) {
+        int c = (unsigned char) *s;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+            continue;
+        enc.append(last, s);
+        snprintf(enc.reserve(3), 3, "%02X", c);
+        last = s + 1;
+    }
+    enc.append(last, end);
 }
 
 #endif

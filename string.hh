@@ -116,6 +116,9 @@ class String : public String_base<String> {
     using String_base<String>::decode_base64;
     String decode_base64() const;
 
+    using String_base<String>::encode_uri_component;
+    String encode_uri_component() const;
+
     inline String& operator=(const String& x);
 #if HAVE_CXX_RVALUE_REFERENCES
     inline String& operator=(String&& x);

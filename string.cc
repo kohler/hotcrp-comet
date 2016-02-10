@@ -1376,3 +1376,9 @@ String String::decode_base64() const {
         return String();
     return sa.take_string();
 }
+
+String String::encode_uri_component() const {
+    StringAccum sa;
+    encode_uri_component(sa);
+    return sa.take_string();
+}
