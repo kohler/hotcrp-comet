@@ -206,12 +206,14 @@ bool Site::status_update_valid(const Json& j) {
     return j.is_o()
         && j["ok"]
         && (update_token.empty() || j["token"] == update_token)
-        && j["tracker_status"].is_s()
+        && (j["tracker_status"].is_null() || j["tracker_status"].is_s())
         && (!j["tracker_status_at"] || j["tracker_status_at"].is_number());
 }
 
 bool Site::set_status(const Json& j, bool is_update) {
     String status1 = j["tracker_status"].to_s();
+    if (status1.empty())
+        status1 = "off";
     std::string status(status1.data(), status1.length());
     double status_seq = j["tracker_status_at"].to_d();
     if (is_update)
