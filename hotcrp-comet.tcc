@@ -104,9 +104,7 @@ class Site : public tamer::tamed_class {
         tamer::http_message req;
         req.url(url_);
         host_ = req.url_host_port();
-        path_ = req.url_path() + "api.php?fn=trackerstatus";
-        if (update_token)
-            path_ += "&token=" + std::string(update_token.encode_uri_component());
+        path_ = req.url_path();
     }
 
     inline const std::string& url() const {
@@ -131,7 +129,11 @@ class Site : public tamer::tamed_class {
         status_change_();
     }
 
+    std::string make_api_path(std::string fn, std::string rest = std::string());
+
     tamed void validate(tamer::event<> done);
+    tamed void check_user(std::vector<tamer::http_header> cookies,
+                          std::string actas, tamer::event<std::string> done);
 
     void wait(const std::string& status, double status_seq,
               tamer::event<> done) {
@@ -171,6 +173,11 @@ class Site : public tamer::tamed_class {
     unsigned long long npoll_;
     unsigned long long nupdate_;
     unsigned npollers_;
+
+    tamed void send(std::string path,
+                    std::vector<tamer::http_header> headers,
+                    tamer::event<Json> done);
+    void send(std::string path, tamer::event<Json> done);
 };
 
 typedef std::unordered_map<std::string, Site> site_map_type;
@@ -181,6 +188,15 @@ Site& make_site(const std::string& url) {
     if (it == sites.end())
         it = sites.insert(std::make_pair(url, Site(url))).first;
     return it->second;
+}
+
+std::string Site::make_api_path(std::string fn, std::string rest) {
+    std::string path = path_ + "api.php?fn=" + fn;
+    if (!rest.empty())
+        path += "&" + rest;
+    if (update_token)
+        path += "&token=" + std::string(update_token.encode_uri_component());
+    return path;
 }
 
 Json Site::status_json() const {
@@ -233,21 +249,15 @@ bool Site::set_status(const Json& j, bool is_update) {
         return false;
 }
 
-tamed void Site::validate(tamer::event<> done) {
+tamed void Site::send(std::string path,
+                      std::vector<tamer::http_header> headers,
+                      tamer::event<Json> done) {
     tvars {
         tamer::http_parser hp(HTTP_RESPONSE);
         tamer::http_message req, res;
         tamer::fd cfd;
         Json j;
         bool opened_pollfd = false;
-    }
-
-    // is status already being checked?
-    {
-        bool checking = !!status_check_;
-        status_check_ += std::move(done);
-        if (checking)
-            return;
     }
 
     // get a polling file descriptor
@@ -260,9 +270,11 @@ tamed void Site::validate(tamer::event<> done) {
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": pollfd";
     }
     req.method(HTTP_GET)
-        .url(path_)
+        .url(path)
         .header("Host", host_)
         .header("Connection", "keep-alive");
+    for (auto& hdr : headers)
+        req.header(hdr.name, hdr.value);
     twait { tamer::http_parser::send_request(cfd, req,
                                              tamer::make_event()); }
 
@@ -273,9 +285,8 @@ tamed void Site::validate(tamer::event<> done) {
         j = Json::parse(res.body());
     if (j.is_o() && update_token)
         j.set("token", update_token); // always trust response
-    if (status_update_valid(j))
-        set_status(j, false);
-    else {
+    if (!(j.is_o() && j["ok"]
+          && (update_token.empty() || j["token"] == update_token))) {
         cfd.close();
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
         if (!opened_pollfd) {
@@ -286,15 +297,48 @@ tamed void Site::validate(tamer::event<> done) {
             log_msg() << "read " << url_ << ": error " << http_errno_name(hp.error());
         else
             log_msg() << "read " << url_ << ": bad tracker status " << res.body();
-        set_status(Json(), false);
     }
     if (!hp.should_keep_alive() && cfd) {
         cfd.close();
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
     }
+    pollfds.push_front(std::move(cfd));
+    done(j);
+}
+
+void Site::send(std::string path, tamer::event<Json> done) {
+    send(path, std::vector<tamer::http_header>(), done);
+}
+
+tamed void Site::validate(tamer::event<> done) {
+    tvars { Json j; }
+
+    // is status already being checked?
+    {
+        bool checking = !!status_check_;
+        status_check_ += std::move(done);
+        if (checking)
+            return;
+    }
+
+    twait { send(make_api_path("trackerstatus"), make_event(j)); }
+    if (status_update_valid(j))
+        set_status(j, false);
+    else
+        set_status(Json(), false);
     status_at_ = tamer::drecent();
     status_check_();
-    pollfds.push_front(std::move(cfd));
+}
+
+tamed void Site::check_user(std::vector<tamer::http_header> cookies,
+                            std::string actas, tamer::event<std::string> done) {
+    tvars { Json j; }
+    twait { send(make_api_path("whoami", actas.empty() ? actas : "actas=" + actas),
+                 cookies, make_event(j)); }
+    if (j.is_o() && j["ok"])
+        done(j["email"].to_s());
+    else
+        done(std::string());
 }
 
 bool check_conference(std::string arg, tamer::http_message& conf_m) {
@@ -327,6 +371,7 @@ class Connection : public tamer::tamed_class {
     tamer::http_parser hp_;
     tamer::http_message req_;
     tamer::http_message res_;
+    std::string user_;
     Json resj_;
     int resj_indent_;
     double created_at_;
@@ -343,6 +388,7 @@ class Connection : public tamer::tamed_class {
     tamed void poll_handler(double timeout, tamer::event<> done);
     void update_handler();
     tamed void handler();
+    tamed void check_user();
 };
 
 std::vector<Connection*> Connection::all;
@@ -422,6 +468,8 @@ Json Connection::status_json() const {
         .set("age", (unsigned long) (tamer::drecent() - created_at_));
     if (state_ >= 0)
         j.set("state", stati[state_]);
+    if (!user_.empty())
+        j.set("user", user_);
     return j;
 }
 
@@ -489,6 +537,17 @@ void Connection::update_handler() {
     hp_.clear_should_keep_alive();
 }
 
+tamed void Connection::check_user() {
+    twait {
+        Site& site = make_site(req_.query("conference"));
+        std::vector<tamer::http_header> cookies;
+        for (auto it = req_.header_begin(); it != req_.header_end(); ++it)
+            if (it->is_canonical("cookie"))
+                cookies.push_back(*it);
+        site.check_user(std::move(cookies), req_.query("actas"), tamer::make_event(user_));
+    }
+}
+
 void hotcrp_comet_status_handler(Json& resj) {
     resj.set("at", tamer::drecent())
         .set("at_time", timestamp_string(tamer::drecent()))
@@ -536,6 +595,8 @@ tamed void Connection::handler() {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
+            if (req_.has_canonical_header("cookie"))
+                check_user();
             if (!req_.query("poll").empty()) {
                 set_state(s_poll);
                 twait volatile {
@@ -552,7 +613,7 @@ tamed void Connection::handler() {
             res_.header("Connection", "close");
         // if (!res_.ok())
         //    res_.status_code(503);
-        res_.body(resj_.unparse(Json::indent_depth(resj_indent_)));
+        res_.body(resj_.unparse(Json::indent_depth(resj_indent_).newline_terminator(true)));
         set_state(s_response);
         twait { hp_.send_response(cfd_, res_, tamer::make_event()); }
         if (!hp_.should_keep_alive())
