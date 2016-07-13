@@ -291,6 +291,7 @@ tamed void Site::send(std::string path,
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
         if (!opened_pollfd) {
             hp.clear();
+            req.clear();
             goto reopen_pollfd;
         }
         if (!hp.ok())
