@@ -853,26 +853,27 @@ int main(int argc, char** argv) {
         logerrs = &std::cerr;
 
     // open PID file
-    int pidfd = -1;
     if (pid_filename) {
         int rdfd = open(pid_filename, O_RDONLY);
         if (rdfd >= 0) {
             int r = flock(rdfd, LOCK_EX);
             if (r != 0) {
-                log_msg(LOG_ERROR) << pid_filename << ": Could not obtain lock\n";
+                log_msg(LOG_ERROR) << pid_filename << ": Could not obtain lock";
                 exit(1);
             }
             char buf[1024];
             ssize_t nr = read(rdfd, buf, 1024);
             if (nr != 2 || buf[0] != '0' || buf[1] != '\n') {
-                log_msg(LOG_ERROR) << pid_filename << ": File exists\n";
+                log_msg(LOG_ERROR) << pid_filename << ": File exists";
                 exit(1);
             }
             unlink(pid_filename);
             close(rdfd);
         }
 
-        pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
+        auto old_mask = umask(022);
+        pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        umask(old_mask);
         if (pidfd < 0) {
             log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
             exit(1);
@@ -905,12 +906,12 @@ int main(int argc, char** argv) {
 
     pid_t pid = maybe_fork(!fg);
 
+    if (pidfd >= 0 && (fg || pid != getpid()))
+        create_pid_file(pid);
     if (pid != getpid()) {
         pidfd = -1;
         exit(0);
     }
-    if (pidfd >= 0)
-        create_pid_file(pid);
     log_msg() << "hotcrp-comet started, pid " << pid;
     for (auto m : startup_fds)
         log_msg(LOG_DEBUG) << m;
