@@ -772,13 +772,7 @@ static void set_userarg(const String& userarg) {
         exit(1);
 }
 
-static void create_pid_file(pid_t pid, const char* pid_filename) {
-    int pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
-    if (pidfd < 0) {
-        log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
-        exit(1);
-    }
-    pid_file = pid_filename;
+static void create_pid_file(int pidfd, pid_t pid) {
     char buf[100];
     int buflen = sprintf(buf, "%ld\n", (long) pid);
     ssize_t nw = write(pidfd, buf, buflen);
@@ -791,7 +785,7 @@ static void exiter() {
     serverfd.close();
     watchfd.close();
     if (pid_file)
-        unlink(pid_file);
+        (void) unlink(pid_file);
 }
 }
 
@@ -854,6 +848,16 @@ int main(int argc, char** argv) {
     if (logs != &std::cerr)
         logerrs = &std::cerr;
 
+    int pidfd = -1;
+    if (pid_filename) {
+        pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
+        if (pidfd < 0) {
+            log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
+            exit(1);
+        }
+        pid_file = pid_filename;
+    }
+
     serverfd = tamer::tcp_listen(port);
     if (!serverfd) {
         log_msg(LOG_ERROR) << "listen: " << strerror(-serverfd.error());
@@ -880,10 +884,12 @@ int main(int argc, char** argv) {
 
     pid_t pid = maybe_fork(!fg);
 
-    if (pid != getpid())
+    if (pid != getpid()) {
+        pid_file = nullptr;
         exit(0);
-    if (pid_filename)
-        create_pid_file(pid, pid_filename);
+    }
+    if (pidfd >= 0)
+        create_pid_file(pidfd, pid);
     log_msg() << "hotcrp-comet started, pid " << pid;
     for (auto m : startup_fds)
         log_msg(LOG_DEBUG) << m;
