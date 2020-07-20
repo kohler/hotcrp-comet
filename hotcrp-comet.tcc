@@ -773,7 +773,7 @@ static void set_userarg(const String& userarg) {
         exit(1);
 }
 
-static void create_pid_file(pid_t pid) {
+static void write_pid_file(pid_t pid) {
     char buf[100];
     int buflen = sprintf(buf, "%ld\n", (long) pid);
     ssize_t nw = write(pidfd, buf, buflen);
@@ -872,7 +872,7 @@ int main(int argc, char** argv) {
         }
 
         auto old_mask = umask(022);
-        pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0666);
         umask(old_mask);
         if (pidfd < 0) {
             log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
@@ -907,7 +907,7 @@ int main(int argc, char** argv) {
     pid_t pid = maybe_fork(!fg);
 
     if (pidfd >= 0 && (fg || pid != getpid()))
-        create_pid_file(pid);
+        write_pid_file(pid);
     if (pid != getpid()) {
         pidfd = -1;
         exit(0);
