@@ -3,6 +3,7 @@
 #include <tamer/http.hh>
 #include <tamer/channel.hh>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <unordered_map>
 #include <fstream>
 #include <iomanip>
@@ -854,8 +855,13 @@ int main(int argc, char** argv) {
     // open PID file
     int pidfd = -1;
     if (pid_filename) {
-        int rdfd = open(pid_filename, O_RDONLY | O_EXLOCK);
+        int rdfd = open(pid_filename, O_RDONLY);
         if (rdfd >= 0) {
+            int r = flock(rdfd, LOCK_EX);
+            if (r != 0) {
+                log_msg(LOG_ERROR) << pid_filename << ": Could not obtain lock\n";
+                exit(1);
+            }
             char buf[1024];
             ssize_t nr = read(rdfd, buf, 1024);
             if (nr != 2 || buf[0] != '0' || buf[1] != '\n') {
