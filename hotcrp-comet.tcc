@@ -32,7 +32,7 @@ static tamer::fd serverfd;
 static tamer::fd watchfd;
 static unsigned nconnections;
 static unsigned connection_limit;
-static const char* pid_file = nullptr;
+static int pidfd = -1;
 static std::ostream* logs;
 static std::ostream* logerrs;
 static int loglevel;
@@ -772,20 +772,22 @@ static void set_userarg(const String& userarg) {
         exit(1);
 }
 
-static void create_pid_file(int pidfd, pid_t pid) {
+static void create_pid_file(pid_t pid) {
     char buf[100];
     int buflen = sprintf(buf, "%ld\n", (long) pid);
     ssize_t nw = write(pidfd, buf, buflen);
     assert(nw == buflen);
-    close(pidfd);
 }
 
 extern "C" {
 static void exiter() {
     serverfd.close();
     watchfd.close();
-    if (pid_file)
-        (void) unlink(pid_file);
+    if (pidfd >= 0) {
+        lseek(pidfd, 0, SEEK_SET);
+        write(pidfd, "0\n", 2);
+        ftruncate(pidfd, 2);
+    }
 }
 }
 
@@ -835,6 +837,7 @@ int main(int argc, char** argv) {
     atexit(exiter);
     catch_sigterm();
 
+    // open log stream
     std::ofstream logf_stream;
     if (log_filename) {
         logf_stream.open(log_filename, std::ofstream::app);
@@ -848,14 +851,26 @@ int main(int argc, char** argv) {
     if (logs != &std::cerr)
         logerrs = &std::cerr;
 
+    // open PID file
     int pidfd = -1;
     if (pid_filename) {
+        int rdfd = open(pid_filename, O_RDONLY | O_EXLOCK);
+        if (rdfd >= 0) {
+            char buf[1024];
+            ssize_t nr = read(rdfd, buf, 1024);
+            if (nr != 2 || buf[0] != '0' || buf[1] != '\n') {
+                log_msg(LOG_ERROR) << pid_filename << ": File exists\n";
+                exit(1);
+            }
+            unlink(pid_filename);
+            close(rdfd);
+        }
+
         pidfd = open(pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0660);
         if (pidfd < 0) {
             log_msg(LOG_ERROR) << pid_filename << ": " << strerror(errno);
             exit(1);
         }
-        pid_file = pid_filename;
     }
 
     serverfd = tamer::tcp_listen(port);
@@ -885,11 +900,11 @@ int main(int argc, char** argv) {
     pid_t pid = maybe_fork(!fg);
 
     if (pid != getpid()) {
-        pid_file = nullptr;
+        pidfd = -1;
         exit(0);
     }
     if (pidfd >= 0)
-        create_pid_file(pidfd, pid);
+        create_pid_file(pid);
     log_msg() << "hotcrp-comet started, pid " << pid;
     for (auto m : startup_fds)
         log_msg(LOG_DEBUG) << m;
