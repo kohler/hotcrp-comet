@@ -111,6 +111,7 @@ class Site : public tamer::tamed_class {
         tamer::http_message req;
         req.url(url_);
         host_ = req.url_host_port();
+        port_ = req.url_port() ? : 80;
         path_ = req.url_path();
     }
 
@@ -169,6 +170,7 @@ class Site : public tamer::tamed_class {
   private:
     std::string url_;
     std::string host_;
+    uint16_t port_;
     std::string path_;
     std::string status_;
     double create_at_;
@@ -276,25 +278,31 @@ tamed void Site::send(std::string path,
     }
 
     // get a polling file descriptor
-    twait { pollfds.pop_front(tamer::make_event(cfd)); }
+    twait {
+        pollfds.pop_front(tamer::make_event(cfd));
+    }
 
  reopen_pollfd:
     if (!cfd || cfd.socket_error()) {
         opened_pollfd = true;
-        twait { tamer::tcp_connect(80, tamer::make_event(cfd)); }
+        twait { tamer::tcp_connect(port_, tamer::make_event(cfd)); }
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": pollfd";
     }
     req.method(HTTP_GET)
         .url(path)
         .header("Host", host_)
         .header("Connection", "keep-alive");
-    for (auto& hdr : headers)
+    for (auto& hdr : headers) {
         req.header(hdr.name, hdr.value);
-    twait { tamer::http_parser::send_request(cfd, req,
-                                             tamer::make_event()); }
+    }
+    twait {
+        tamer::http_parser::send_request(cfd, req, tamer::make_event());
+    }
 
     // parse response
-    twait { hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res))); }
+    twait {
+        hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res)));
+    }
     j = Json();
     if (hp.ok() && res.ok()) {
         j = Json::parse(res.body());
@@ -534,7 +542,9 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         poll_status = site.status();
     }
     site.add_poller();
-    while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
+    while (cfd_
+           && tamer::drecent() < timeout_at
+           && state_ == s_poll
            && (site.status() == poll_status || site.status_seq() < status_seq)
            && site.pulse_at() < start_at) {
         twait {
@@ -621,7 +631,9 @@ tamed void Connection::handler() {
     while (cfd_) {
         req_.error(HPE_PAUSED);
         set_state(s_request);
-        twait { hp_.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
+        twait {
+            hp_.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_)));
+        }
         if (!hp_.ok() || !req_.ok()) {
             if (!hp_.ok() && hp_.error() != HPE_INVALID_EOF_STATE) {
                 log_msg(LOG_DEBUG) << "fd " << cfd_.recent_fdnum() << ": request fail " << http_errno_name(hp_.error());
