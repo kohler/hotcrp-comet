@@ -15,8 +15,8 @@
  */
 // -*- c-basic-offset: 4 -*-
 #include "json.hh"
-#include "compiler.hh"
-#include <ctype.h>
+#include "cbits.hh"
+#include <cctype>
 
 /** @class Json
     @brief Json data.

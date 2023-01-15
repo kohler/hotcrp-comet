@@ -55,14 +55,14 @@ $(TAMEDDIR)/%.hh: %.thh config.h $(DEPSDIR)/stamp $(TAMER)
 %.S: %.o
 	objdump -S $< > $@
 
-hotcrp-comet: hotcrp-comet.o json.o str.o string.o straccum.o compiler.o clp.o \
+hotcrp-comet: hotcrp-comet.o json.o str.o string.o straccum.o clp.o cbits.o \
 		$(LIBTAMER)
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-jsontest: jsontest.o string.o straccum.o json.o compiler.o
+jsontest: jsontest.o string.o straccum.o json.o cbits.o
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
-msgpacktest: msgpacktest.o string.o straccum.o json.o compiler.o msgpack.o
+msgpacktest: msgpacktest.o string.o straccum.o json.o msgpack.o cbits.o
 	$(CXX) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(LIBS)
 
 config.h: stamp-h

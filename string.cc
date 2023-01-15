@@ -34,10 +34,10 @@
 
 #include "string.hh"
 #include "straccum.hh"
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
-#include <inttypes.h>
+#include <cstdio>
+#include <cstring>
+#include <cctype>
+#include <cinttypes>
 #include <vector>
 
 /** @file string.hh
@@ -583,7 +583,7 @@ String::String(int x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%d", x);
+        snprintf(buf, sizeof(buf), "%d", x);
         assign(buf, -1, false);
     }
 }
@@ -595,7 +595,7 @@ String::String(unsigned x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%u", x);
+        snprintf(buf, sizeof(buf), "%u", x);
         assign(buf, -1, false);
     }
 }
@@ -607,7 +607,7 @@ String::String(long x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%ld", x);
+        snprintf(buf, sizeof(buf), "%ld", x);
         assign(buf, -1, false);
     }
 }
@@ -619,7 +619,7 @@ String::String(unsigned long x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%lu", x);
+        snprintf(buf, sizeof(buf), "%lu", x);
         assign(buf, -1, false);
     }
 }
@@ -631,7 +631,7 @@ String::String(long long x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%lld", x);
+        snprintf(buf, sizeof(buf), "%lld", x);
         assign(buf, -1, false);
     }
 }
@@ -643,7 +643,7 @@ String::String(unsigned long long x)
         _r.assign(int_data + 2 * x, 1, 0);
     else {
         char buf[128];
-        sprintf(buf, "%llu", x);
+        snprintf(buf, sizeof(buf), "%llu", x);
         assign(buf, -1, false);
     }
 }
@@ -651,7 +651,7 @@ String::String(unsigned long long x)
 String::String(double x)
 {
     char buf[128];
-    int len = sprintf(buf, "%.12g", x);
+    int len = snprintf(buf, sizeof(buf), "%.12g", x);
     assign(buf, len, false);
 }
 
@@ -974,11 +974,11 @@ hard_printable(const String &s, int pos, int type)
             if (x[pos] >= 9 && x[pos] <= 13)
                 sa << '\\' << ("tnvfr"[x[pos] - 9]);
             else if (char *buf = sa.extend(4, 1))
-                sprintf(buf, "\\%03o", x[pos]);
+                snprintf(buf, 4, "\\%03o", x[pos]);
         } else if (x[pos] < 32 && type != 1)
             sa << '^' << (unsigned char)(x[pos] + 64);
         else if (char *buf = sa.extend(4, 1))
-            sprintf(buf, "\\%03o", x[pos]);
+            snprintf(buf, 4, "\\%03o", x[pos]);
     }
     return sa.take_string();
 }

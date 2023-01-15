@@ -20,7 +20,7 @@
 #include "str.hh"
 #include <vector>
 #include <utility>
-#include <stdlib.h>
+#include <cstdlib>
 
 template <typename P> class Json_proxy_base;
 template <typename T> class Json_object_proxy;

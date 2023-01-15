@@ -46,27 +46,32 @@ class log_msg {
  public:
     log_msg(int msglevel = LOG_NORMAL)
         : msglevel_(msglevel) {
-        if (logs && msglevel <= loglevel && msglevel <= MAX_LOGLEVEL)
+        if (logs && msglevel <= loglevel && msglevel <= MAX_LOGLEVEL) {
             logf_ = logs;
-        else if (msglevel == LOG_ERROR)
+        } else if (msglevel == LOG_ERROR) {
             logf_ = logerrs;
-        else
+        } else {
             logf_ = nullptr;
-        if (logf_)
+        }
+        if (logf_) {
             add_prefix();
+        }
     }
     ~log_msg() {
         if (logf_) {
             std::string str = stream_.str();
-            if (logerrs && msglevel_ == LOG_ERROR)
+            if (logerrs && msglevel_ == LOG_ERROR) {
                 *logerrs << str.substr(str.find(']') + 2) << std::endl;
-            if (logf_ && (msglevel_ != LOG_ERROR || logf_ != logerrs))
+            }
+            if (logf_ && (msglevel_ != LOG_ERROR || logf_ != logerrs)) {
                 *logf_ << str << std::endl;
+            }
         }
     }
     template <typename T> log_msg& operator<<(T&& x) {
-        if (logf_)
+        if (logf_) {
             stream_ << x;
+        }
         return *this;
     }
  private:
@@ -100,8 +105,9 @@ class Site : public tamer::tamed_class {
           status_at_(0), status_change_at_(0), status_seq_(0),
           pulse_at_(0),
           npoll_(0), nupdate_(0), npollers_(0) {
-        if (url_.back() != '/')
+        if (url_.back() != '/') {
             url_ += '/';
+        }
         tamer::http_message req;
         req.url(url_);
         host_ = req.url_host_port();
@@ -138,12 +144,13 @@ class Site : public tamer::tamed_class {
 
     void wait(const std::string& status, double status_seq,
               tamer::event<> done) {
-        if (is_valid() && status_ == status)
+        if (is_valid() && status_ == status) {
             status_change_ += std::move(done);
-        else if (is_valid() && status_seq_ >= status_seq)
+        } else if (is_valid() && status_seq_ >= status_seq) {
             done();
-        else
+        } else {
             validate(std::move(done));
+        }
     }
 
     void add_poller() {
@@ -186,17 +193,20 @@ site_map_type sites;
 
 Site& make_site(const std::string& url) {
     auto it = sites.find(url);
-    if (it == sites.end())
+    if (it == sites.end()) {
         it = sites.insert(std::make_pair(url, Site(url))).first;
+    }
     return it->second;
 }
 
 std::string Site::make_api_path(std::string fn, std::string rest) {
     std::string path = path_ + "api.php?fn=" + fn;
-    if (!rest.empty())
+    if (!rest.empty()) {
         path += "&" + rest;
-    if (update_token)
+    }
+    if (update_token) {
         path += "&token=" + std::string(update_token.encode_uri_component());
+    }
     return path;
 }
 
@@ -209,8 +219,9 @@ Json Site::status_json() const {
         .set("npoll", npoll_)
         .set("nupdate", nupdate_)
         .set("npollers", npollers_);
-    if (status_check_)
+    if (status_check_) {
         j.set("status_check", true);
+    }
     return j;
 }
 
@@ -229,12 +240,14 @@ bool Site::status_update_valid(const Json& j) {
 
 bool Site::set_status(const Json& j, bool is_update) {
     String status1 = j["tracker_status"].to_s();
-    if (status1.empty())
+    if (status1.empty()) {
         status1 = "off";
+    }
     std::string status(status1.data(), status1.length());
     double status_seq = j["tracker_status_at"].to_d();
-    if (is_update)
+    if (is_update) {
         add_update();
+    }
     if (status_ != status
         && (!status_seq || status_seq > status_seq_)) {
         status_ = status;
@@ -246,8 +259,9 @@ bool Site::set_status(const Json& j, bool is_update) {
     } else if (j["pulse"]) {
         pulse();
         return false;
-    } else
+    } else {
         return false;
+    }
 }
 
 tamed void Site::send(std::string path,
@@ -282,10 +296,12 @@ tamed void Site::send(std::string path,
     // parse response
     twait { hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res))); }
     j = Json();
-    if (hp.ok() && res.ok())
+    if (hp.ok() && res.ok()) {
         j = Json::parse(res.body());
-    if (j.is_o() && update_token)
+    }
+    if (j.is_o() && update_token) {
         j.set("token", update_token); // always trust response
+    }
     if (!(j.is_o() && j["ok"]
           && (update_token.empty() || j["token"] == update_token))) {
         cfd.close();
@@ -295,10 +311,11 @@ tamed void Site::send(std::string path,
             req.clear();
             goto reopen_pollfd;
         }
-        if (!hp.ok())
+        if (!hp.ok()) {
             log_msg() << "read " << url_ << ": error " << http_errno_name(hp.error());
-        else
+        } else {
             log_msg() << "read " << url_ << ": bad tracker status " << res.body();
+        }
     }
     if (!hp.should_keep_alive() && cfd) {
         cfd.close();
@@ -319,15 +336,17 @@ tamed void Site::validate(tamer::event<> done) {
     {
         bool checking = !!status_check_;
         status_check_ += std::move(done);
-        if (checking)
+        if (checking) {
             return;
+        }
     }
 
     twait { send(make_api_path("trackerstatus"), make_event(j)); }
-    if (status_update_valid(j))
+    if (status_update_valid(j)) {
         set_status(j, false);
-    else
+    } else {
         set_status(Json(), false);
+    }
     status_at_ = tamer::drecent();
     status_check_();
 }
@@ -337,19 +356,22 @@ tamed void Site::check_user(std::vector<tamer::http_header> cookies,
     tvars { Json j; }
     twait { send(make_api_path("whoami", actas.empty() ? actas : "actas=" + actas),
                  cookies, make_event(j)); }
-    if (j.is_o() && j["ok"])
+    if (j.is_o() && j["ok"]) {
         done(j["email"].to_s());
-    else
+    } else {
         done(std::string());
+    }
 }
 
 bool check_conference(std::string arg, tamer::http_message& conf_m) {
-    if (arg.empty())
+    if (arg.empty()) {
         return false;
+    }
     conf_m.url(arg);
     if (conf_m.url_schema().empty()
-        || conf_m.url_host().empty())
+        || conf_m.url_host().empty()) {
         return false;
+    }
     return true;
 }
 
@@ -401,8 +423,9 @@ Connection::Connection(tamer::fd cfd)
       created_at_(tamer::drecent()), state_(-1) {
     assert(cfd_.valid());
     log_msg(LOG_DEBUG) << "fd " << cfd_.fdnum() << ": connection";
-    if (all.size() <= (unsigned) cfd_.fdnum())
+    if (all.size() <= (unsigned) cfd_.fdnum()) {
         all.resize(cfd_.fdnum() + 1, nullptr);
+    }
     assert(!all[cfd_.fdnum()]);
     all[cfd_.fdnum()] = this;
     ++nconnections;
@@ -427,17 +450,19 @@ void Connection::set_state(int state) {
     if (state != state_ && state_ != -1) {
         prev_->next_ = next_;
         next_->prev_ = prev_;
-        if (state_head[state_] == this && next_ == this)
+        if (state_head[state_] == this && next_ == this) {
             state_head[state_] = nullptr;
-        else if (state_head[state_] == this)
+        } else if (state_head[state_] == this) {
             state_head[state_] = next_;
+        }
     }
     if (state != state_ && state != -1) {
         if (state_head[state]) {
             prev_ = state_head[state]->prev_;
             next_ = state_head[state];
-        } else
+        } else {
             prev_ = next_ = this;
+        }
         prev_->next_ = next_->prev_ = state_head[state] = this;
     }
     state_ = state;
@@ -445,14 +470,16 @@ void Connection::set_state(int state) {
 
 void Connection::clear_one(Connection* dont_clear) {
     Connection* c = nullptr;
-    if (state_head[s_request])
+    if (state_head[s_request]) {
         c = state_head[s_request]->prev_;
+    }
     if ((!c || c == dont_clear || c->age() < 1)
-        && state_head[s_poll])
+        && state_head[s_poll]) {
         c = state_head[s_poll]->prev_;
-    if (!c || c == dont_clear)
-        /* do nothing */;
-    else if (c->state_ == s_request) {
+    }
+    if (!c || c == dont_clear) {
+        // do nothing
+    } else if (c->state_ == s_request) {
         log_msg() << "premature delete " << c->status_json();
         delete c;
     } else if (c->state_ == s_poll) {
@@ -468,18 +495,21 @@ Json Connection::status_json() const {
     static const char* stati[] = {"request", "poll", "response"};
     Json j = Json().set("fd", cfd_.fdnum())
         .set("age", (unsigned long) (tamer::drecent() - created_at_));
-    if (state_ >= 0)
+    if (state_ >= 0) {
         j.set("state", stati[state_]);
-    if (!user_.empty())
+    }
+    if (!user_.empty()) {
         j.set("user", user_);
+    }
     return j;
 }
 
 double poll_timeout(double timeout) {
     if (timeout <= 0 || timeout > min_poll_timeout) {
         double t = min_poll_timeout + drand48() * (max_poll_timeout - min_poll_timeout);
-        if (timeout <= 0 || timeout > t)
+        if (timeout <= 0 || timeout > t) {
             timeout = t;
+        }
     }
     return timeout;
 }
@@ -496,26 +526,30 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     }
     if (!req_.query("tracker_status_at").empty()) {
         Json j = Json::parse(req_.query("tracker_status_at"));
-        if (j.is_number())
+        if (j.is_number()) {
             status_seq = j.to_d();
+        }
     }
-    if (poll_status.empty())
+    if (poll_status.empty()) {
         poll_status = site.status();
+    }
     site.add_poller();
     while (cfd_ && tamer::drecent() < timeout_at && state_ == s_poll
            && (site.status() == poll_status || site.status_seq() < status_seq)
-           && site.pulse_at() < start_at)
+           && site.pulse_at() < start_at) {
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
             site.wait(poll_status, status_seq, poll_event_);
             status_seq = 0;
         }
-    if (!site.status().empty())
+    }
+    if (!site.status().empty()) {
         resj_.set("ok", true).set("tracker_status", site.status())
             .set("tracker_status_at", site.status_seq());
-    else
+    } else {
         resj_.set("ok", false);
+    }
     hp_.clear_should_keep_alive();
     site.resolve_poller();
     done();
@@ -524,18 +558,22 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
 void Connection::update_handler() {
     Json j = Json().set("ok", true)
         .set("tracker_status", req_.query("tracker_status"));
-    if (!req_.query("tracker_status_at").empty())
+    if (!req_.query("tracker_status_at").empty()) {
         j.set("tracker_status_at", Json::parse(req_.query("tracker_status_at")));
-    if (!req_.query("pulse").empty())
+    }
+    if (!req_.query("pulse").empty()) {
         j.set("pulse", Json::parse(req_.query("pulse")));
-    if (!req_.query("token").empty())
+    }
+    if (!req_.query("token").empty()) {
         j.set("token", req_.query("token"));
+    }
     Site& site = make_site(req_.query("conference"));
     if (Site::status_update_valid(j)) {
         site.set_status(j, true);
         resj_.set("ok", true);
-    } else
+    } else {
         resj_.set("ok", false).set("error", "invalid status update");
+    }
     hp_.clear_should_keep_alive();
 }
 
@@ -543,9 +581,10 @@ tamed void Connection::check_user() {
     twait {
         Site& site = make_site(req_.query("conference"));
         std::vector<tamer::http_header> cookies;
-        for (auto it = req_.header_begin(); it != req_.header_end(); ++it)
+        for (auto it = req_.header_begin(); it != req_.header_end(); ++it) {
             if (it->is_canonical("cookie"))
                 cookies.push_back(*it);
+        }
         site.check_user(std::move(cookies), req_.query("actas"), tamer::make_event(user_));
     }
 }
@@ -557,14 +596,16 @@ void hotcrp_comet_status_handler(Json& resj) {
         .set("connection_limit", connection_limit);
 
     Json sitesj = Json();
-    for (auto it = sites.begin(); it != sites.end(); ++it)
+    for (auto it = sites.begin(); it != sites.end(); ++it) {
         sitesj[it->first] = it->second.status_json();
+    }
     resj.set("sites", sitesj);
 
     Json connj = Json();
-    for (auto it = Connection::all.begin(); it != Connection::all.end(); ++it)
+    for (auto it = Connection::all.begin(); it != Connection::all.end(); ++it) {
         if (*it)
             connj.push_back((*it)->status_json());
+    }
     std::sort(connj.abegin(), connj.aend(), [](const Json& a, const Json& b) {
             return a.get("age").as_d() > b.get("age").as_d();
         });
@@ -582,8 +623,9 @@ tamed void Connection::handler() {
         set_state(s_request);
         twait { hp_.receive(cfd_, tamer::add_timeout(timeout, tamer::make_event(req_))); }
         if (!hp_.ok() || !req_.ok()) {
-            if (!hp_.ok() && hp_.error() != HPE_INVALID_EOF_STATE)
+            if (!hp_.ok() && hp_.error() != HPE_INVALID_EOF_STATE) {
                 log_msg(LOG_DEBUG) << "fd " << cfd_.recent_fdnum() << ": request fail " << http_errno_name(hp_.error());
+            }
             break;
         }
         res_.error(HPE_PAUSED)
@@ -597,29 +639,34 @@ tamed void Connection::handler() {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
-            if (req_.has_canonical_header("cookie"))
+            if (req_.has_canonical_header("cookie")) {
                 check_user();
+            }
             if (!req_.query("poll").empty()) {
                 set_state(s_poll);
                 twait volatile {
                     Json j = Json::parse(req_.query("timeout"));
                     poll_handler(j.is_number() ? j.to_d() / 1000. : 0, tamer::make_event());
                 }
-            } else if (!req_.query("tracker_status").empty())
+            } else if (!req_.query("tracker_status").empty()) {
                 update_handler();
-        } else
+            }
+        } else {
             resj_.set("ok", false).set("error", "missing `conference`");
+        }
         res_.error(HPE_OK).date_header("Date", tamer::recent().tv_sec)
             .header("Content-Type", "application/json");
-        if (resj_["ok"] || !hp_.should_keep_alive())
+        if (resj_["ok"] || !hp_.should_keep_alive()) {
             res_.header("Connection", "close");
+        }
         // if (!res_.ok())
         //    res_.status_code(503);
         res_.body(resj_.unparse(Json::indent_depth(resj_indent_).newline_terminator(true)));
         set_state(s_response);
         twait { hp_.send_response(cfd_, res_, tamer::make_event()); }
-        if (!hp_.should_keep_alive())
+        if (!hp_.should_keep_alive()) {
             break;
+        }
         res_.clear();
         timeout = 5; // keep-alive timeout drops to 5sec
     }
@@ -639,8 +686,9 @@ tamed void listener() {
         twait { serverfd.accept(tamer::make_event(cfd)); }
         if (cfd) {
             Connection* c = Connection::add(std::move(cfd));
-            if (nconnections > connection_limit)
+            if (nconnections > connection_limit) {
                 Connection::clear_one(c);
+            }
         }
     }
 }
@@ -675,16 +723,18 @@ tamed void directory_watcher(const char* update_directory) {
     record_startup_fd(dirfd, "watch directory");
     while (watchfd) {
         twait { watchfd.read_once(buf, sizeof(buf), r, tamer::make_event(e)); }
-        if (e != 0)
+        if (e != 0) {
             log_msg() << update_directory << ": " << strerror(-e);
+        }
         for (size_t off = 0; off < r; ) {
             ievent* x = reinterpret_cast<ievent*>(&buf[off]);
             int ffd = openat(dirfd, x->name, O_RDONLY);
             if (ffd >= 0) {
                 StringAccum sa;
                 ssize_t r;
-                while ((r = read(ffd, sa.reserve(8192), 8192)) > 0)
+                while ((r = read(ffd, sa.reserve(8192), 8192)) > 0) {
                     sa.adjust_length(r);
+                }
                 Json j = Json::parse(sa.take_string());
                 if (j && j["conference"].is_s() && Site::status_update_valid(j)) {
                     Site& site = make_site(j["conference"].to_s());
@@ -735,8 +785,9 @@ static pid_t maybe_fork(bool dofork) {
         if (pid == -1) {
             log_msg(LOG_ERROR) << "fork: " << strerror(errno);
             exit(1);
-        } else if (pid > 0)
+        } else if (pid > 0) {
             return pid;
+        }
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
@@ -753,14 +804,17 @@ static void set_userarg(const String& userarg) {
     if (colon >= 0) {
         user = userarg.substr(0, colon);
         group = userarg.substr(colon + 1);
-    } else
+    } else {
         user = group = userarg;
+    }
     struct passwd* pwent = nullptr;
     struct group* grent = nullptr;
-    if (user && !(pwent = getpwnam(user.c_str())))
+    if (user && !(pwent = getpwnam(user.c_str()))) {
         log_msg(LOG_ERROR) << "user " << user << " does not exist";
-    if (group && !(grent = getgrnam(group.c_str())))
+    }
+    if (group && !(grent = getgrnam(group.c_str()))) {
         log_msg(LOG_ERROR) << "group " << group << " does not exist";
+    }
     if (grent && setgid(grent->gr_gid) != 0) {
         log_msg(LOG_ERROR) << "setgid: " << strerror(errno);
         grent = nullptr;
@@ -769,13 +823,14 @@ static void set_userarg(const String& userarg) {
         log_msg(LOG_ERROR) << "setuid: " << strerror(errno);
         pwent = nullptr;
     }
-    if ((user && !pwent) || (group && !grent))
+    if ((user && !pwent) || (group && !grent)) {
         exit(1);
+    }
 }
 
 static void write_pid_file(pid_t pid) {
     char buf[100];
-    int buflen = sprintf(buf, "%ld\n", (long) pid);
+    int buflen = snprintf(buf, sizeof(buf), "%ld\n", (long) pid);
     ssize_t nw = write(pidfd, buf, buflen);
     assert(nw == buflen);
 }
@@ -806,31 +861,32 @@ int main(int argc, char** argv) {
     const char* update_directory = nullptr;
     String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
-    while (1) {
+    while (true) {
         int opt = Clp_Next(clp);
-        if (Clp_IsLong(clp, "fg"))
+        if (Clp_IsLong(clp, "fg")) {
             fg = true;
-        else if (Clp_IsLong(clp, "nfiles")) {
+        } else if (Clp_IsLong(clp, "nfiles")) {
             nfiles = clp->val.i;
             nfiles_set = true;
-        } else if (Clp_IsLong(clp, "port"))
+        } else if (Clp_IsLong(clp, "port")) {
             port = clp->val.i;
-        else if (Clp_IsLong(clp, "pid-file"))
+        } else if (Clp_IsLong(clp, "pid-file")) {
             pid_filename = clp->val.s;
-        else if (Clp_IsLong(clp, "log-file") || Clp_IsLong(clp, "log"))
+        } else if (Clp_IsLong(clp, "log-file") || Clp_IsLong(clp, "log")) {
             log_filename = clp->val.s;
-        else if (Clp_IsLong(clp, "log-level"))
+        } else if (Clp_IsLong(clp, "log-level")) {
             loglevel = std::max(0, std::min(MAX_LOGLEVEL, clp->val.i));
-        else if (Clp_IsLong(clp, "token"))
+        } else if (Clp_IsLong(clp, "token")) {
             update_token = clp->val.s;
-        else if (Clp_IsLong(clp, "update-directory"))
+        } else if (Clp_IsLong(clp, "update-directory")) {
             update_directory = clp->val.s;
-        else if (Clp_IsLong(clp, "user"))
+        } else if (Clp_IsLong(clp, "user")) {
             userarg = clp->val.s;
-        else if (opt != Clp_Done)
+        } else if (opt != Clp_Done) {
             usage();
-        else
+        } else {
             break;
+        }
     }
 
     tamer::initialize();
@@ -847,10 +903,12 @@ int main(int argc, char** argv) {
             exit(1);
         }
         logs = &logf_stream;
-    } else if (fg)
+    } else if (fg) {
         logs = &std::cerr;
-    if (logs != &std::cerr)
+    }
+    if (logs != &std::cerr) {
         logerrs = &std::cerr;
+    }
 
     // open PID file
     if (pid_filename) {
@@ -887,36 +945,43 @@ int main(int argc, char** argv) {
     }
     listener();
 
-    if (update_directory)
+    if (update_directory) {
         directory_watcher(update_directory);
+    }
 
-    if (userarg)
+    if (userarg) {
         set_userarg(userarg);
+    }
 
     if (nfiles_set) {
         int r = tamer::fd::open_limit(nfiles <= 0 ? INT_MAX : nfiles);
-        if (r < nfiles)
+        if (r < nfiles) {
             log_msg(LOG_ERROR) << "hotcrp-comet: limited to " << r << " open files";
+        }
     }
     connection_limit = tamer::fd::open_limit();
-    if (connection_limit > 100)
+    if (connection_limit > 100) {
         connection_limit -= 20;
-    else
+    } else {
         connection_limit = 0;
+    }
 
     pid_t pid = maybe_fork(!fg);
 
-    if (pidfd >= 0 && (fg || pid != getpid()))
+    if (pidfd >= 0 && (fg || pid != getpid())) {
         write_pid_file(pid);
+    }
     if (pid != getpid()) {
         pidfd = -1;
         exit(0);
     }
     log_msg() << "hotcrp-comet started, pid " << pid;
-    for (auto m : startup_fds)
+    for (auto m : startup_fds) {
         log_msg(LOG_DEBUG) << m;
-    while (pollfds.size() != MAX_NPOLLFDS)
+    }
+    while (pollfds.size() != MAX_NPOLLFDS) {
         pollfds.push_back(tamer::fd());
+    }
 
     tamer::loop();
     tamer::cleanup();

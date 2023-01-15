@@ -13,9 +13,9 @@
  * notice is a summary of the Masstree LICENSE file; the license in that file
  * is legally binding.
  */
-#include "compiler.hh"
-#include <stdio.h>
-#include <stdlib.h>
+#include "cbits.hh"
+#include <cstdio>
+#include <cstdlib>
 
 void fail_always_assert(const char* file, int line,
                         const char* assertion, const char* message) {

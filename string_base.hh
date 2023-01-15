@@ -15,12 +15,12 @@
  */
 #ifndef STRING_BASE_HH
 #define STRING_BASE_HH
-#include "compiler.hh"
+#include "cbits.hh"
 #include "hashcode.hh"
-#include <assert.h>
-#include <string.h>
-#include <limits.h>
-#include <ctype.h>
+#include <cassert>
+#include <cstring>
+#include <climits>
+#include <cctype>
 #include <iostream>
 class StringAccum;
 #define LCDF_CONSTANT_CSTR(cstr) ((cstr) && __builtin_constant_p(strlen((cstr))))

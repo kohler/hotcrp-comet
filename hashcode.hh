@@ -15,8 +15,8 @@
  */
 #ifndef CLICK_HASHCODE_HH
 #define CLICK_HASHCODE_HH
-#include <stddef.h>
-#include <inttypes.h>
+#include <cstddef>
+#include <cinttypes>
 #if HAVE_STD_HASH
 #include <functional>
 #endif
