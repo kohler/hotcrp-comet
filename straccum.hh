@@ -43,17 +43,13 @@ class StringAccum { public:
     template <typename T>
     inline StringAccum(const String_base<T>& str);
     inline StringAccum(const StringAccum& x);
-#if HAVE_CXX_RVALUE_REFERENCES
     inline StringAccum(StringAccum&& x);
     inline StringAccum(String&& x);
-#endif
     inline ~StringAccum();
     static inline StringAccum make_transfer(String& x);
 
     inline StringAccum& operator=(const StringAccum& x);
-#if HAVE_CXX_RVALUE_REFERENCES
     inline StringAccum& operator=(StringAccum&& x);
-#endif
 
     inline const char* data() const;
     inline char* data();
@@ -214,7 +210,6 @@ inline StringAccum::StringAccum(const StringAccum &x) {
     append(x.data(), x.length());
 }
 
-#if HAVE_CXX_RVALUE_REFERENCES
 /** @brief Move-construct a StringAccum from @a x. */
 inline StringAccum::StringAccum(StringAccum&& x) {
     using std::swap;
@@ -225,7 +220,6 @@ inline StringAccum::StringAccum(String&& x) {
     transfer_from(x);
     x._r = String::rep_type{String_generic::empty_data, 0, 0};
 }
-#endif
 
 /** @brief Destroy a StringAccum, freeing its memory. */
 inline StringAccum::~StringAccum() {
@@ -631,13 +625,11 @@ inline StringAccum &StringAccum::operator=(const StringAccum &x) {
     return *this;
 }
 
-#if HAVE_CXX_RVALUE_REFERENCES
 /** @brief Move-assign this StringAccum to @a x. */
 inline StringAccum &StringAccum::operator=(StringAccum &&x) {
     x.swap(*this);
     return *this;
 }
-#endif
 
 /** @relates StringAccum
     @brief Append character @a c to StringAccum @a sa.

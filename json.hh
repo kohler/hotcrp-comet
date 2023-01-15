@@ -871,10 +871,10 @@ template <typename P>
 class Json_proxy_base {
   public:
     const Json& cvalue() const {
-        return static_cast<const P *>(this)->cvalue();
+        return static_cast<const P*>(this)->cvalue();
     }
     Json& value() {
-        return static_cast<P *>(this)->value();
+        return static_cast<P*>(this)->value();
     }
     operator const Json&() const {
         return cvalue();
@@ -1347,7 +1347,7 @@ class Json_object_proxy : public Json_proxy_base<Json_object_proxy<T> > {
     Json_object_proxy(T& ref, const String& key)
         : base_(ref), key_(key) {
     }
-    T &base_;
+    T& base_;
     String key_;
 };
 
@@ -1375,7 +1375,7 @@ class Json_object_str_proxy : public Json_proxy_base<Json_object_str_proxy<T> > 
     Json_object_str_proxy(T& ref, Str key)
         : base_(ref), key_(key) {
     }
-    T &base_;
+    T& base_;
     Str key_;
 };
 
@@ -1402,6 +1402,9 @@ class Json_array_proxy : public Json_proxy_base<Json_array_proxy<T> > {
     }
     Json_array_proxy(T& ref, int key)
         : base_(ref), key_(key) {
+    }
+    Json_array_proxy(const Json_array_proxy<T>& x)
+        : base_(x.base_), key_(x.key_) {
     }
     T &base_;
     int key_;
@@ -1491,18 +1494,22 @@ inline Json::Json(const null_t&) {
 /** @brief Construct a Json copy of @a x. */
 inline Json::Json(const Json& x)
     : u_(x.u_) {
-    if (u_.x.type < 0)
+    if (u_.x.type < 0) {
         u_.str.ref();
-    if (u_.x.x && (u_.x.type == j_array || u_.x.type == j_object))
+    }
+    if (u_.x.x && (u_.x.type == j_array || u_.x.type == j_object)) {
         u_.x.x->ref();
+    }
 }
 /** @overload */
 template <typename P> inline Json::Json(const Json_proxy_base<P>& x)
     : u_(x.cvalue().u_) {
-    if (u_.x.type < 0)
+    if (u_.x.type < 0) {
         u_.str.ref();
-    if (u_.x.x && (u_.x.type == j_array || u_.x.type == j_object))
+    }
+    if (u_.x.x && (u_.x.type == j_array || u_.x.type == j_object)) {
         u_.x.x->ref();
+    }
 }
 /** @overload */
 inline Json::Json(Json&& x)
@@ -2090,11 +2097,13 @@ inline Json::size_type Json::count(Str key) const {
 inline const Json& Json::get(Str key) const {
     int i;
     ObjectJson *oj;
-    if (is_object() && (oj = ojson())
-        && (i = oj->find(key.data(), key.length())) >= 0)
+    if (is_object()
+        && (oj = ojson())
+        && (i = oj->find(key.data(), key.length())) >= 0) {
         return oj->item(i).v_.second;
-    else
+    } else {
         return hard_get(key);
+    }
 }
 
 /** @brief Return a reference to the value of @a key in an object Json.

@@ -31,9 +31,7 @@ class String : public String_base<String> {
 
     inline String();
     inline String(const String &x);
-#if HAVE_CXX_RVALUE_REFERENCES
     inline String(String &&x);
-#endif
     template <typename T>
     explicit inline String(const String_base<T>& str);
     inline String(const char* cstr);
@@ -120,18 +118,14 @@ class String : public String_base<String> {
     String encode_uri_component() const;
 
     inline String& operator=(const String& x);
-#if HAVE_CXX_RVALUE_REFERENCES
     inline String& operator=(String&& x);
-#endif
     template <typename T>
     inline String& operator=(const String_base<T>& str);
     inline String& operator=(const char* cstr);
     inline String& operator=(const std::string& str);
 
     inline void assign(const String& x);
-#if HAVE_CXX_RVALUE_REFERENCES
     inline void assign(String&& x);
-#endif
     template <typename T>
     inline void assign(const String_base<T>& str);
     inline void assign(const char* cstr);
@@ -366,13 +360,11 @@ inline String::String(const String& x)
     _r.ref();
 }
 
-#if HAVE_CXX_RVALUE_REFERENCES
 /** @brief Move-construct a String from @a x. */
 inline String::String(String &&x)
     : _r(x._r) {
     x._r.reset_ref();
 }
-#endif
 
 /** @brief Construct a copy of the string @a str. */
 template <typename T>
@@ -642,7 +634,6 @@ inline String& String::operator=(const String& x) {
     return *this;
 }
 
-#if HAVE_CXX_RVALUE_REFERENCES
 /** @brief Move-assign this string to @a x. */
 inline void String::assign(String&& x) {
     deref();
@@ -655,7 +646,6 @@ inline String& String::operator=(String&& x) {
     assign(std::move(x));
     return *this;
 }
-#endif
 
 /** @brief Assign this string to the C string @a cstr. */
 inline void String::assign(const char* cstr) {
@@ -872,11 +862,9 @@ inline String operator+(String a, char b) {
     return a;
 }
 
-#if HAVE_CXX_USER_LITERALS
 inline String operator"" _S(const char* s, size_t len) {
     return String::make_stable(s, s + len);
 }
-#endif
 
 inline void swap(String& a, String& b) {
     a.swap(b);

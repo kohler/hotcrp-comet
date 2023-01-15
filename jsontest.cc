@@ -18,6 +18,7 @@
 
 #include "json.hh"
 #include <unordered_map>
+#include <iostream>
 
 #define CHECK(x) do { if (!(x)) { std::cerr << __FILE__ << ":" << __LINE__ << ": test '" << #x << "' failed\n"; exit(1); } } while (0)
 #define CHECK_JUP(x, str) do { if ((x).unparse() != (str)) { std::cerr << __FILE__ << ":" << __LINE__ << ": '" #x "' is '" << (x) << "', not '" << (str) << "'\n"; exit(1); } } while (0)
@@ -115,8 +116,6 @@ int main(int argc, char** argv) {
       \"cores\":2,\n\
       \"runs\":[\"x24\\/rw1\\/b\\/0\"]\n\
     },\"b\":\"c\",\"c\":\"d\"}");
-    CHECK(j["x22"]["time"] == "Tue Feb  7 20:20:33 2012");
-    CHECK(j["x22"]["cores"] == 2);
     {
         Json::object_iterator it = j.obegin();
         CHECK(it.key() == "x22");
@@ -129,6 +128,9 @@ int main(int argc, char** argv) {
         ++it;
         CHECK(it.key() == "c");
     }
+    CHECK(j["c"] == "d");
+    CHECK(j["x22"]["cores"] == 2);
+    CHECK(j["x22"]["time"] == "Tue Feb  7 20:20:33 2012");
 
     {
         Json jcopy = j;
