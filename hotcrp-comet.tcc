@@ -18,7 +18,8 @@
 
 #define LOG_ERROR 0
 #define LOG_NORMAL 1
-#define LOG_DEBUG 2
+#define LOG_VERBOSE 2
+#define LOG_DEBUG 3
 
 #define MAX_LOGLEVEL LOG_DEBUG
 #define MAX_NPOLLFDS 5
@@ -39,6 +40,7 @@ static std::ostream* logerrs;
 static int loglevel;
 static std::vector<std::string> startup_fds;
 static String update_token;
+static bool verbose;
 
 #define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
@@ -269,7 +271,7 @@ bool Site::set_status(const Json& j, bool is_update) {
 tamed void Site::send(std::string path,
                       std::vector<tamer::http_header> headers,
                       tamer::event<Json> done) {
-    tvars {
+    tamed {
         tamer::http_parser hp(HTTP_RESPONSE);
         tamer::http_message req, res;
         tamer::fd cfd;
@@ -304,6 +306,7 @@ tamed void Site::send(std::string path,
         hp.receive(cfd, tamer::add_timeout(120, tamer::make_event(res)));
     }
     j = Json();
+    log_msg(LOG_VERBOSE) << "> GET http://" << host_ << path << " -> " << res.status_code();
     if (hp.ok() && res.ok()) {
         j = Json::parse(res.body());
     }
@@ -320,9 +323,9 @@ tamed void Site::send(std::string path,
             goto reopen_pollfd;
         }
         if (!hp.ok()) {
-            log_msg() << "read " << url_ << ": error " << http_errno_name(hp.error());
+            log_msg() << host_ << path << ": error " << http_errno_name(hp.error());
         } else {
-            log_msg() << "read " << url_ << ": bad tracker status " << res.body();
+            log_msg() << host_ << path << ": bad tracker status " << res.body();
         }
     }
     if (!hp.should_keep_alive() && cfd) {
@@ -338,7 +341,7 @@ void Site::send(std::string path, tamer::event<Json> done) {
 }
 
 tamed void Site::validate(tamer::event<> done) {
-    tvars { Json j; }
+    tamed { Json j; }
 
     // is status already being checked?
     {
@@ -361,7 +364,7 @@ tamed void Site::validate(tamer::event<> done) {
 
 tamed void Site::check_user(std::vector<tamer::http_header> cookies,
                             std::string actas, tamer::event<std::string> done) {
-    tvars { Json j; }
+    tamed { Json j; }
     twait { send(make_api_path("whoami", actas.empty() ? actas : "actas=" + actas),
                  cookies, make_event(j)); }
     if (j.is_o() && j["ok"]) {
@@ -523,7 +526,7 @@ double poll_timeout(double timeout) {
 }
 
 tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
-    tvars {
+    tamed {
         Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
         std::ostringstream buf;
@@ -623,7 +626,7 @@ void hotcrp_comet_status_handler(Json& resj) {
 }
 
 tamed void Connection::handler() {
-    tvars {
+    tamed {
         tamer::http_message confurl;
         double timeout = connection_timeout;
     }
@@ -639,6 +642,9 @@ tamed void Connection::handler() {
                 log_msg(LOG_DEBUG) << "fd " << cfd_.recent_fdnum() << ": request fail " << http_errno_name(hp_.error());
             }
             break;
+        }
+        if (loglevel >= LOG_VERBOSE) {
+            log_msg(LOG_VERBOSE) << "< " << http_method_str(req_.method()) << " " << req_.url();
         }
         res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
@@ -692,7 +698,7 @@ static void record_startup_fd(int fd, const char* msg) {
 }
 
 tamed void listener() {
-    tvars { tamer::fd cfd; }
+    tamed { tamer::fd cfd; }
     record_startup_fd(serverfd.fdnum(), "listen");
     while (serverfd) {
         twait { serverfd.accept(tamer::make_event(cfd)); }
@@ -709,7 +715,7 @@ tamed void listener() {
 typedef struct inotify_event ievent;
 
 tamed void directory_watcher(const char* update_directory) {
-    tvars {
+    tamed {
         char buf[sizeof(struct inotify_event) + 1 + NAME_MAX];
         int dirfd, e;
         size_t r;
@@ -783,7 +789,8 @@ static const Clp_Option options[] = {
     { "port", 'p', 0, Clp_ValInt, 0 },
     { "token", 't', 0, Clp_ValString, 0 },
     { "update-directory", 0, 0, Clp_ValString, 0 },
-    { "user", 'u', 0, Clp_ValString, 0 }
+    { "user", 'u', 0, Clp_ValString, 0 },
+    { "verbose", 'V', 0, 0, 0 }
 };
 
 static void usage() {
@@ -894,6 +901,9 @@ int main(int argc, char** argv) {
             update_directory = clp->val.s;
         } else if (Clp_IsLong(clp, "user")) {
             userarg = clp->val.s;
+        } else if (Clp_IsLong(clp, "verbose")) {
+            verbose = true;
+            loglevel = std::max(loglevel, LOG_VERBOSE);
         } else if (opt != Clp_Done) {
             usage();
         } else {
@@ -955,6 +965,7 @@ int main(int argc, char** argv) {
         log_msg(LOG_ERROR) << "listen: " << strerror(-serverfd.error());
         exit(1);
     }
+    log_msg(LOG_VERBOSE) << "listen http://localhost:" << port;
     listener();
 
     if (update_directory) {
