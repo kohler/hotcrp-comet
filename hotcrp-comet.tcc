@@ -103,10 +103,7 @@ void log_msg::add_prefix() {
 class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
-        : url_(std::move(url)), create_at_(tamer::drecent()),
-          status_at_(0), status_change_at_(0), status_seq_(0),
-          pulse_at_(0),
-          npoll_(0), nupdate_(0), npollers_(0) {
+        : url_(std::move(url)), create_at_(tamer::drecent()) {
         if (url_.back() != '/') {
             url_ += '/';
         }
@@ -143,7 +140,7 @@ class Site : public tamer::tamed_class {
 
     tamed void validate(tamer::event<> done);
     tamed void check_user(std::vector<tamer::http_header> cookies,
-                          std::string actas, tamer::event<std::string> done);
+                          tamer::event<bool, std::string> done);
 
     void wait(const std::string& status, double status_seq,
               tamer::event<> done) {
@@ -176,15 +173,15 @@ class Site : public tamer::tamed_class {
     std::string path_;
     std::string status_;
     double create_at_;
-    double status_at_;
-    double status_change_at_;
-    double status_seq_;
-    double pulse_at_;
+    double status_at_ = 0.0;
+    double status_change_at_ = 0.0;
+    double status_seq_ = 0.0;
+    double pulse_at_ = 0.0;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
-    unsigned long long npoll_;
-    unsigned long long nupdate_;
-    unsigned npollers_;
+    unsigned long long npoll_ = 0;
+    unsigned long long nupdate_ = 0;
+    unsigned npollers_ = 0;
 
     tamed void send(std::string path,
                     std::vector<tamer::http_header> headers,
@@ -363,14 +360,15 @@ tamed void Site::validate(tamer::event<> done) {
 }
 
 tamed void Site::check_user(std::vector<tamer::http_header> cookies,
-                            std::string actas, tamer::event<std::string> done) {
+                            tamer::event<bool, std::string> done) {
     tamed { Json j; }
-    twait { send(make_api_path("whoami", actas.empty() ? actas : "actas=" + actas),
-                 cookies, make_event(j)); }
+    twait {
+        send(make_api_path("whoami", ""), cookies, make_event(j));
+    }
     if (j.is_o() && j["ok"]) {
-        done(j["email"].to_s());
+        done(true, j["email"].to_s());
     } else {
-        done(std::string());
+        done(false, std::string());
     }
 }
 
@@ -407,6 +405,7 @@ class Connection : public tamer::tamed_class {
     tamer::http_message req_;
     tamer::http_message res_;
     std::string user_;
+    double user_checked_at_ = 0.0;
     Json resj_;
     int resj_indent_;
     double created_at_;
@@ -591,6 +590,10 @@ void Connection::update_handler() {
 }
 
 tamed void Connection::check_user() {
+    tamed {
+        bool ok;
+        std::string user;
+    }
     twait {
         Site& site = make_site(req_.query("conference"));
         std::vector<tamer::http_header> cookies;
@@ -598,8 +601,12 @@ tamed void Connection::check_user() {
             if (it->is_canonical("cookie"))
                 cookies.push_back(*it);
         }
-        site.check_user(std::move(cookies), req_.query("actas"), tamer::make_event(user_));
+        site.check_user(std::move(cookies), tamer::make_event(ok, user));
     }
+    if (ok) {
+        user_ = user;
+    }
+    user_checked_at_ = tamer::drecent();
 }
 
 void hotcrp_comet_status_handler(Json& resj) {
@@ -657,7 +664,8 @@ tamed void Connection::handler() {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
-            if (req_.has_canonical_header("cookie")) {
+            if (req_.has_canonical_header("cookie")
+                && tamer::drecent() - user_checked_at_ > 600) {
                 check_user();
             }
             if (!req_.query("poll").empty()) {
