@@ -448,6 +448,7 @@ struct user_map {
     double used_at = 0.0;
     char firstch = 0;
     bool locked = true;
+    unsigned long nused = 0;
     std::vector<tamer::http_header> cookies;
     std::string user;
 
@@ -500,6 +501,7 @@ tamed void lookup_user(Site& site, std::vector<tamer::http_header> cookies,
                 && users[i].timestamp > expiry
                 && users[i].cookies_equal(cookies)) {
                 users[i].used_at = now;
+                ++users[i].nused;
                 done(users[i].user);
                 return;
             }
@@ -525,6 +527,7 @@ tamed void lookup_user(Site& site, std::vector<tamer::http_header> cookies,
         users[oldi].locked = true;
         users[oldi].timestamp = users[oldi].used_at = now;
         users[oldi].firstch = firstch;
+        users[oldi].nused = 0;
         std::swap(users[oldi].cookies, cookies);
     }
 
@@ -789,9 +792,39 @@ void hotcrp_comet_status_handler(Json& resj) {
             connj.push_back((*it)->status_json());
     }
     std::sort(connj.abegin(), connj.aend(), [](const Json& a, const Json& b) {
-            return a.get("age").as_d() > b.get("age").as_d();
-        });
+        return a.get("age").as_d() > b.get("age").as_d();
+    });
     resj.set("connections", connj);
+
+    if (!users.empty()) {
+        Json usersj = Json();
+        for (auto it = users.begin(); it != users.end(); ++it) {
+            if (!it->locked) {
+                Json uj = Json().set("user", it->user);
+                std::string cookie;
+                for (auto cit = it->cookies.begin(); cit != it->cookies.end(); ++cit) {
+                    if (cookie.empty()) {
+                        cookie = cit->value;
+                    } else {
+                        cookie += "; ";
+                        cookie += cit->value;
+                    }
+                }
+                uj.set("cookie", cookie);
+                set_age_minutes(uj, "age_min", it->timestamp);
+                if (it->nused > 0) {
+                    uj.set("nused", it->nused);
+                }
+                usersj.push_back(uj);
+            }
+        }
+        std::sort(usersj.abegin(), usersj.aend(), [](const Json& a, const Json& b) {
+            return a.get("age_min").as_d() < b.get("age_min").as_d();
+        });
+        if (!usersj.empty()) {
+            resj.set("user_cache", usersj);
+        }
+    }
 }
 
 tamed void Connection::handler() {
