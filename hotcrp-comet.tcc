@@ -107,7 +107,7 @@ void log_msg::add_prefix() {
 class Site : public tamer::tamed_class {
   public:
     explicit Site(std::string url)
-        : url_(std::move(url)), create_at_(tamer::drecent()) {
+        : url_(std::move(url)), created_at_(tamer::drecent()) {
         if (url_.back() != '/') {
             url_ += '/';
         }
@@ -185,7 +185,7 @@ class Site : public tamer::tamed_class {
     std::string status_;
     uint64_t eventid_ = 0;
     double status_at_ = 0.0;
-    double create_at_;
+    double created_at_;
     double eventid_at_ = 0.0;
     double validate_at_ = 0.0;
     int validate_fail_ = 0;
@@ -236,7 +236,7 @@ static void set_age_minutes(Json& j, const char* name, double dt) {
 
 Json Site::status_json() const {
     Json j = Json().set("site", url_).set("eventid", eventid_);
-    set_age_minutes(j, "age_min", create_at_);
+    set_age_minutes(j, "age_min", created_at_);
     set_age_minutes(j, "event_age_min", eventid_at_);
     set_age_minutes(j, "validate_age_min", validate_at_);
     j.set("npoll", npoll_)
@@ -312,6 +312,16 @@ bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
     return true;
 }
 
+static std::string trim_body(tamer::http_message& msg) {
+    std::string body = msg.body();
+    if (body.empty()) {
+        body = "<empty>";
+    } else {
+        body.erase(body.find_last_not_of(" \r\n\t\v\f") + 1);
+    }
+    return body;
+}
+
 tamed void Site::send(std::string path,
                       std::vector<tamer::http_header> headers,
                       tamer::event<Json> done) {
@@ -363,7 +373,7 @@ tamed void Site::send(std::string path,
           && j["ok"]
           && (update_token.empty() || j["token"] == update_token))) {
         cfd.close();
-        log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
+        log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close " << trim_body(res);
         if (!opened_pollfd) {
             hp.clear();
             req.clear();
@@ -372,13 +382,7 @@ tamed void Site::send(std::string path,
         if (!hp.ok()) {
             log_msg() << host_ << path << ": error " << http_errno_name(hp.error());
         } else {
-            std::string body = res.body();
-            if (body.empty()) {
-                body = "<empty>";
-            } else {
-                body.erase(body.find_last_not_of(" \r\n\t\v\f") + 1);
-            }
-            log_msg() << host_ << path << ": bad tracker status " << body;
+            log_msg() << host_ << path << ": bad tracker status " << trim_body(res);
         }
     }
     if (!hp.should_keep_alive() && cfd) {
