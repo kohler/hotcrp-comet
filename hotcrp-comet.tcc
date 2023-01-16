@@ -32,9 +32,10 @@ static constexpr unsigned site_error_validate_timeout = 1;
 static constexpr double user_validate_timeout = 120;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
-static uint16_t verify_port = 0;
+static int verify_port = 0;
 static tamer::channel<tamer::fd> pollfds;
 static tamer::fd serverfd;
+static tamer::fd statusserverfd;
 static tamer::fd watchfd;
 static unsigned nconnections;
 static unsigned connection_limit;
@@ -547,7 +548,7 @@ tamed void lookup_user(Site& site, std::vector<tamer::http_header> cookies,
 
 class Connection : public tamer::tamed_class {
  public:
-    static Connection* add(tamer::fd cfd);
+    static Connection* add(tamer::fd cfd, bool allow_status);
     static std::vector<Connection*> all;
     static void clear_one(Connection* dont_clear);
 
@@ -567,6 +568,7 @@ class Connection : public tamer::tamed_class {
     std::string recent_site_;
     Json resj_;
     int resj_indent_;
+    bool allow_status_;
     double created_at_;
     tamer::event<> poll_event_;
     int state_;
@@ -576,7 +578,7 @@ class Connection : public tamer::tamed_class {
     static Connection* state_head[3];
     void set_state(int state);
 
-    Connection(tamer::fd cfd);
+    Connection(tamer::fd cfd, bool allow_status);
     ~Connection();
     tamed void poll_handler(double timeout, tamer::event<> done);
     void update_handler();
@@ -587,9 +589,9 @@ class Connection : public tamer::tamed_class {
 std::vector<Connection*> Connection::all;
 Connection* Connection::state_head[3];
 
-Connection::Connection(tamer::fd cfd)
+Connection::Connection(tamer::fd cfd, bool allow_status)
     : cfd_(std::move(cfd)), hp_(HTTP_REQUEST),
-      created_at_(tamer::drecent()), state_(-1) {
+      allow_status_(allow_status), created_at_(tamer::drecent()), state_(-1) {
     assert(cfd_.valid());
     log_msg(LOG_DEBUG) << "fd " << cfd_.fdnum() << ": connection";
     if (all.size() <= (unsigned) cfd_.fdnum()) {
@@ -600,8 +602,8 @@ Connection::Connection(tamer::fd cfd)
     ++nconnections;
 }
 
-Connection* Connection::add(tamer::fd cfd) {
-    Connection* c = new Connection(std::move(cfd));
+Connection* Connection::add(tamer::fd cfd, bool allow_status) {
+    Connection* c = new Connection(std::move(cfd), allow_status);
     c->handler();
     return c;
 }
@@ -861,7 +863,7 @@ tamed void Connection::handler() {
         resj_.clear();
         resj_indent_ = 0;
         url_path = req_.url_path();
-        if (url_path == "/status") {
+        if (url_path == "/status" && allow_status_) {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
@@ -884,7 +886,7 @@ tamed void Connection::handler() {
                 resj_.set("ok", false).set("error", "bad request");
             }
         } else {
-            resj_.set("ok", false).set("error", "missing `conference`");
+            resj_.set("ok", false).set("error", "bad request");
         }
         res_.error(HPE_OK).date_header("Date", tamer::recent().tv_sec)
             .header("Content-Type", "application/json");
@@ -911,13 +913,13 @@ static void record_startup_fd(int fd, const char* msg) {
     startup_fds.push_back(buf.str());
 }
 
-tamed void listener() {
+tamed void listener(tamer::fd sfd, bool allow_status) {
     tamed { tamer::fd cfd; }
-    record_startup_fd(serverfd.fdnum(), "listen");
-    while (serverfd) {
-        twait { serverfd.accept(tamer::make_event(cfd)); }
+    record_startup_fd(sfd.fdnum(), "listen");
+    while (sfd) {
+        twait { sfd.accept(tamer::make_event(cfd)); }
         if (cfd) {
-            Connection* c = Connection::add(std::move(cfd));
+            Connection* c = Connection::add(std::move(cfd), allow_status);
             if (nconnections > connection_limit) {
                 Connection::clear_one(c);
             }
@@ -1001,6 +1003,7 @@ static const Clp_Option options[] = {
     { "nfiles", 'n', 0, Clp_ValInt, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
     { "port", 'p', 0, Clp_ValInt, 0 },
+    { "status-port", 0, 0, Clp_ValInt, 0 },
     { "token", 't', 0, Clp_ValString, 0 },
     { "update-directory", 0, 0, Clp_ValString, 0 },
     { "user", 'u', 0, Clp_ValString, 0 },
@@ -1072,6 +1075,7 @@ static void write_pid_file(pid_t pid) {
 extern "C" {
 static void exiter() {
     serverfd.close();
+    statusserverfd.close();
     watchfd.close();
     if (pidfd >= 0) {
         lseek(pidfd, 0, SEEK_SET);
@@ -1088,6 +1092,7 @@ static void driver_error_handler(int, int err, std::string msg) {
 int main(int argc, char** argv) {
     bool fg = false;
     int port = 20444;
+    int status_port = 0;
     int nfiles = 0;
     bool nfiles_set = false;
     const char* pid_filename = nullptr;
@@ -1104,6 +1109,8 @@ int main(int argc, char** argv) {
             nfiles_set = true;
         } else if (Clp_IsLong(clp, "port")) {
             port = clp->val.i;
+        } else if (Clp_IsLong(clp, "status-port")) {
+            status_port = clp->val.i;
         } else if (Clp_IsLong(clp, "verify-port")) {
             verify_port = clp->val.i;
         } else if (Clp_IsLong(clp, "pid-file")) {
@@ -1183,7 +1190,17 @@ int main(int argc, char** argv) {
         exit(1);
     }
     log_msg(LOG_VERBOSE) << "listen http://localhost:" << port;
-    listener();
+    listener(serverfd, status_port == 0);
+
+    if (status_port > 0) {
+        statusserverfd = tamer::tcp_listen(status_port);
+        if (!statusserverfd) {
+            log_msg(LOG_ERROR) << "listen: " << strerror(-serverfd.error());
+            exit(1);
+        }
+        log_msg(LOG_VERBOSE) << "listen http://localhost:" << port;
+        listener(statusserverfd, true);
+    }
 
     if (update_directory) {
         directory_watcher(update_directory);
