@@ -8,6 +8,8 @@
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <pwd.h>
 #include <grp.h>
 #include "clp.h"
@@ -120,13 +122,20 @@ class Site : public tamer::tamed_class {
     inline const std::string& status() const {
         return status_;
     }
-    inline double status_seq() const {
-        return status_seq_;
+    inline constexpr double status_at() const {
+        return status_at_;
+    }
+    inline uint64_t eventid() const {
+        return eventid_;
     }
     inline bool is_valid() const;
 
-    static bool status_update_valid(const Json& j);
-    bool set_status(const Json& j, bool is_update);
+    enum source_type {
+        source_validate = 0,
+        source_update = 1,
+        source_filesystem = 2
+    };
+    bool update(const Json& j, source_type source, uint64_t old_eventid);
 
     inline double pulse_at() const {
         return pulse_at_;
@@ -142,14 +151,13 @@ class Site : public tamer::tamed_class {
     tamed void check_user(std::vector<tamer::http_header> cookies,
                           tamer::event<bool, std::string> done);
 
-    void wait(const std::string& status, double status_seq,
-              tamer::event<> done) {
-        if (is_valid() && status_ == status) {
-            status_change_ += std::move(done);
-        } else if (is_valid() && status_seq_ >= status_seq) {
+    void wait(uint64_t eventid, tamer::event<> done) {
+        if (!is_valid()) {
+            validate(std::move(done));
+        } else if (eventid != eventid_) {
             done();
         } else {
-            validate(std::move(done));
+            status_change_ += std::move(done);
         }
     }
 
@@ -157,11 +165,12 @@ class Site : public tamer::tamed_class {
         ++npoll_;
         ++npollers_;
     }
-    void resolve_poller() {
+    void resolve_poller(bool blocked) {
         --npollers_;
-    }
-    void add_update() {
-        ++nupdate_;
+        if (!blocked) {
+            ++npoll_noblock_;
+            ++recent_poll_noblock_;
+        }
     }
 
     Json status_json() const;
@@ -172,15 +181,20 @@ class Site : public tamer::tamed_class {
     uint16_t port_;
     std::string path_;
     std::string status_;
-    double create_at_;
+    uint64_t eventid_ = 0;
     double status_at_ = 0.0;
-    double status_change_at_ = 0.0;
-    double status_seq_ = 0.0;
+    double create_at_;
+    double eventid_at_ = 0.0;
+    double validate_at_ = 0.0;
     double pulse_at_ = 0.0;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
     unsigned long long npoll_ = 0;
-    unsigned long long nupdate_ = 0;
+    unsigned long long npoll_noblock_ = 0;
+    unsigned recent_poll_noblock_ = 0;
+    unsigned long long nupdate_[3] = {0, 0, 0};
+    unsigned long long nupfail_[3] = {0, 0, 0};
+    unsigned long long nbadreq_ = 0;
     unsigned npollers_ = 0;
 
     tamed void send(std::string path,
@@ -211,15 +225,26 @@ std::string Site::make_api_path(std::string fn, std::string rest) {
     return path;
 }
 
+static void set_age_minutes(Json& j, const char* name, double dt) {
+    if (dt) {
+        j.set(name, round((tamer::drecent() - dt) / 6) / 10);
+    }
+}
+
 Json Site::status_json() const {
-    Json j = Json().set("site", url_)
-        .set("status", status_)
-        .set("age", (unsigned long) (tamer::drecent() - create_at_))
-        .set("status_age", (unsigned long) (tamer::drecent() - status_change_at_))
-        .set("check_age", (unsigned long) (tamer::drecent() - status_at_))
-        .set("npoll", npoll_)
-        .set("nupdate", nupdate_)
-        .set("npollers", npollers_);
+    Json j = Json().set("site", url_).set("eventid", eventid_);
+    set_age_minutes(j, "age_min", create_at_);
+    set_age_minutes(j, "event_age_min", eventid_at_);
+    set_age_minutes(j, "validate_age_min", validate_at_);
+    j.set("npoll", npoll_)
+        .set("nupdate", nupdate_[0] + nupdate_[1] + nupdate_[2]);
+    if (unsigned long long nupfail = nupfail_[0] + nupfail_[1] + nupfail_[2]) {
+        j.set("nupdate_fail", nupfail);
+    }
+    if (nbadreq_ > 0) {
+        j.set("nbad_request", nbadreq_);
+    }
+    j.set("npollers", npollers_);
     if (status_check_) {
         j.set("status_check", true);
     }
@@ -227,42 +252,52 @@ Json Site::status_json() const {
 }
 
 inline bool Site::is_valid() const {
-    double to = status_.empty() ? site_error_validate_timeout : site_validate_timeout;
-    return status_at_ && tamer::drecent() - status_at_ < to;
-}
-
-bool Site::status_update_valid(const Json& j) {
-    return j.is_o()
-        && j["ok"]
-        && (update_token.empty() || j["token"] == update_token)
-        && (j["tracker_status"].is_null() || j["tracker_status"].is_s())
-        && (!j["tracker_status_at"] || j["tracker_status_at"].is_number());
-}
-
-bool Site::set_status(const Json& j, bool is_update) {
-    String status1 = j["tracker_status"].to_s();
-    if (status1.empty()) {
-        status1 = "off";
-    }
-    std::string status(status1.data(), status1.length());
-    double status_seq = j["tracker_status_at"].to_d();
-    if (is_update) {
-        add_update();
-    }
-    if (status_ != status
-        && (!status_seq || status_seq > status_seq_)) {
-        status_ = status;
-        status_change_at_ = tamer::drecent();
-        status_seq_ = status_seq;
-        status_change_();
-        log_msg() << url_ << ": tracker " << (is_update ? "update " : "status ") << status;
-        return true;
-    } else if (j["pulse"]) {
-        pulse();
+    if (!validate_at_
+        || recent_poll_noblock_ > 20) {
         return false;
+    }
+    double to = eventid_ ? site_error_validate_timeout : site_validate_timeout;
+    return tamer::drecent() - validate_at_ < to;
+}
+
+bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
+    if (!j.is_o()
+        || !j["ok"]
+        || (!update_token.empty() && j["token"] != update_token)
+        || !j["tracker_eventid"].is_u()) {
+        ++nupfail_[source];
+        return false;
+    }
+    uint64_t eventid = j["tracker_eventid"].to_u();
+    if (eventid < eventid_
+        && (source != source_validate || eventid_ != prev_eventid)) {
+        return false;
+    }
+
+    if (eventid == eventid_) {
+        if (j["pulse"]) {
+            pulse();
+        }
     } else {
-        return false;
+        eventid_ = eventid;
+        if (j["tracker_status"].is_s()) {
+            status_ = j["tracker_status"].to_s();
+        } else {
+            status_ = std::string();
+        }
+        if (j["tracker_status_at"].is_d()) {
+            status_at_ = j["tracker_status_at"].to_d();
+        } else {
+            status_at_ = 0;
+        }
+        eventid_at_ = tamer::drecent();
+        ++nupdate_[source];
+        status_change_();
+        log_msg() << "* " << url_ << " #" << eventid_;
     }
+
+    recent_poll_noblock_ = 0;
+    return true;
 }
 
 tamed void Site::send(std::string path,
@@ -310,7 +345,8 @@ tamed void Site::send(std::string path,
     if (j.is_o() && update_token) {
         j.set("token", update_token); // always trust response
     }
-    if (!(j.is_o() && j["ok"]
+    if (!(j.is_o()
+          && j["ok"]
           && (update_token.empty() || j["token"] == update_token))) {
         cfd.close();
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": close";
@@ -338,7 +374,10 @@ void Site::send(std::string path, tamer::event<Json> done) {
 }
 
 tamed void Site::validate(tamer::event<> done) {
-    tamed { Json j; }
+    tamed {
+        uint64_t prev_eventid = eventid_;
+        Json j;
+    }
 
     // is status already being checked?
     {
@@ -349,13 +388,12 @@ tamed void Site::validate(tamer::event<> done) {
         }
     }
 
-    twait { send(make_api_path("trackerstatus"), make_event(j)); }
-    if (status_update_valid(j)) {
-        set_status(j, false);
-    } else {
-        set_status(Json(), false);
+    twait {
+        send(make_api_path("trackerstatus"), make_event(j));
     }
-    status_at_ = tamer::drecent();
+
+    update(j, source_validate, prev_eventid);
+    validate_at_ = tamer::drecent();
     status_check_();
 }
 
@@ -528,50 +566,63 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     tamed {
         Site& site = make_site(req_.query("conference"));
         tamer::destroy_guard guard(&site);
-        std::ostringstream buf;
-        std::string poll_status = req_.query("poll");
+        uint64_t poll_eventid = 0;
         double start_at = tamer::drecent();
         double timeout_at = start_at + poll_timeout(timeout);
-        double status_seq = 1;
+        bool blocked = false;
     }
-    if (!req_.query("tracker_status_at").empty()) {
-        Json j = Json::parse(req_.query("tracker_status_at"));
-        if (j.is_number()) {
-            status_seq = j.to_d();
+    {
+        std::string poll_status = req_.query("poll");
+        const char* ps = poll_status.c_str();
+        const char* ps_end = ps + poll_status.length();
+        uint64_t result = 0;
+        auto [ptr, ec] { std::from_chars(ps, ps_end, result, 10) };
+        if (ptr == ps_end && ec == std::errc()) {
+            poll_eventid = result;
+        } else if (poll_status.empty() || site.status() == poll_status) {
+            poll_eventid = site.eventid();
+        } else {
+            poll_eventid = site.eventid() - 1;
         }
     }
-    if (poll_status.empty()) {
-        poll_status = site.status();
-    }
     site.add_poller();
+
     while (cfd_
+           && site.pulse_at() < start_at
            && tamer::drecent() < timeout_at
            && state_ == s_poll
-           && (site.status() == poll_status || site.status_seq() < status_seq)
-           && site.pulse_at() < start_at) {
+           && (site.eventid() == poll_eventid || !site.is_valid())) {
+        blocked = true;
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
-            site.wait(poll_status, status_seq, poll_event_);
-            status_seq = 0;
+            site.wait(poll_eventid, poll_event_);
         }
     }
+
     if (!site.status().empty()) {
-        resj_.set("ok", true).set("tracker_status", site.status())
-            .set("tracker_status_at", site.status_seq());
+        resj_.set("ok", true)
+            .set("tracker_status", site.status())
+            .set("tracker_status_at", site.status_at())
+            .set("tracker_eventid", site.eventid());
     } else {
         resj_.set("ok", false);
     }
     hp_.clear_should_keep_alive();
-    site.resolve_poller();
+    site.resolve_poller(blocked);
     done();
 }
 
 void Connection::update_handler() {
-    Json j = Json().set("ok", true)
-        .set("tracker_status", req_.query("tracker_status"));
+    Json j = Json().set("ok", true);
+    if (!req_.query("tracker_status").empty()) {
+        j.set("tracker_status", req_.query("tracker_status"));
+    }
     if (!req_.query("tracker_status_at").empty()) {
         j.set("tracker_status_at", Json::parse(req_.query("tracker_status_at")));
+    }
+    if (!req_.query("tracker_eventid").empty()) {
+        j.set("tracker_eventid", Json::parse(req_.query("tracker_eventid")));
     }
     if (!req_.query("pulse").empty()) {
         j.set("pulse", Json::parse(req_.query("pulse")));
@@ -580,8 +631,7 @@ void Connection::update_handler() {
         j.set("token", req_.query("token"));
     }
     Site& site = make_site(req_.query("conference"));
-    if (Site::status_update_valid(j)) {
-        site.set_status(j, true);
+    if (site.update(j, Site::source_update, 0)) {
         resj_.set("ok", true);
     } else {
         resj_.set("ok", false).set("error", "invalid status update");
@@ -636,6 +686,7 @@ tamed void Connection::handler() {
     tamed {
         tamer::http_message confurl;
         double timeout = connection_timeout;
+        std::string url_path;
     }
     // log_msg() << "new connection " << status_json();
     while (cfd_) {
@@ -660,22 +711,28 @@ tamed void Connection::handler() {
             .header("Expires", "Mon, 26 Jul 1997 05:00:00 GMT");
         resj_.clear();
         resj_indent_ = 0;
-        if (req_.url_path() == "/status") {
+        url_path = req_.url_path();
+        if (url_path == "/status") {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
             if (req_.has_canonical_header("cookie")
-                && tamer::drecent() - user_checked_at_ > 600) {
+                && tamer::drecent() - user_checked_at_ > 600
+                && verbose) {
                 check_user();
             }
-            if (!req_.query("poll").empty()) {
+            if (url_path.length() >= 7
+                && url_path.compare(url_path.length() - 7, 7, "/update") == 0) {
+                update_handler();
+            } else if (url_path.length() >= 5
+                       && url_path.compare(url_path.length() - 5, 5, "/poll") == 0) {
                 set_state(s_poll);
                 twait volatile {
                     Json j = Json::parse(req_.query("timeout"));
                     poll_handler(j.is_number() ? j.to_d() / 1000. : 0, tamer::make_event());
                 }
-            } else if (!req_.query("tracker_status").empty()) {
-                update_handler();
+            } else {
+                resj_.set("ok", false).set("error", "bad request");
             }
         } else {
             resj_.set("ok", false).set("error", "missing `conference`");
@@ -764,7 +821,7 @@ tamed void directory_watcher(const char* update_directory) {
                 Json j = Json::parse(sa.take_string());
                 if (j && j["conference"].is_s() && Site::status_update_valid(j)) {
                     Site& site = make_site(j["conference"].to_s());
-                    site.set_status(j, true);
+                    site.update(j, Site::source_filesystem, 0);
                     unlinkat(dirfd, x->name, 0);
                 }
                 close(ffd);
