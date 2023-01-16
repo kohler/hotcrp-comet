@@ -1194,7 +1194,7 @@ Json::streaming_parser::consume_number(const uint8_t* first,
             first = str_.uend();
         }
         if (prev + 1 == first)
-            j = Json(int(*prev - '0'));
+            j = Json(uint64_t(*prev - '0'));
         else if (position < 4) {
             bool negative = *prev == '-';
             prev += int(negative);
