@@ -31,6 +31,7 @@ static double site_validate_timeout = 120;
 static double site_error_validate_timeout = 5;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
+static uint16_t verify_port = 0;
 static tamer::channel<tamer::fd> pollfds;
 static tamer::fd serverfd;
 static tamer::fd watchfd;
@@ -319,7 +320,9 @@ tamed void Site::send(std::string path,
  reopen_pollfd:
     if (!cfd || cfd.socket_error()) {
         opened_pollfd = true;
-        twait { tamer::tcp_connect(port_, tamer::make_event(cfd)); }
+        twait {
+            tamer::tcp_connect(verify_port > 0 ? verify_port : port_, tamer::make_event(cfd));
+        }
         log_msg(LOG_DEBUG) << "fd " << cfd.recent_fdnum() << ": pollfd";
     }
     req.method(HTTP_GET)
@@ -858,7 +861,8 @@ static const Clp_Option options[] = {
     { "token", 't', 0, Clp_ValString, 0 },
     { "update-directory", 0, 0, Clp_ValString, 0 },
     { "user", 'u', 0, Clp_ValString, 0 },
-    { "verbose", 'V', 0, 0, 0 }
+    { "verbose", 'V', 0, 0, 0 },
+    { "verify-port", 'P', 0, Clp_ValInt, 0 }
 };
 
 static void usage() {
@@ -957,6 +961,8 @@ int main(int argc, char** argv) {
             nfiles_set = true;
         } else if (Clp_IsLong(clp, "port")) {
             port = clp->val.i;
+        } else if (Clp_IsLong(clp, "verify-port")) {
+            verify_port = clp->val.i;
         } else if (Clp_IsLong(clp, "pid-file")) {
             pid_filename = clp->val.s;
         } else if (Clp_IsLong(clp, "log-file") || Clp_IsLong(clp, "log")) {
