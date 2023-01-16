@@ -8,8 +8,8 @@
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
-#include <charconv>
 #include <cmath>
+#include <cctype>
 #include <pwd.h>
 #include <grp.h>
 #include "clp.h"
@@ -575,9 +575,12 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         std::string poll_status = req_.query("poll");
         const char* ps = poll_status.c_str();
         const char* ps_end = ps + poll_status.length();
+        char* ptr = nullptr;
         uint64_t result = 0;
-        auto [ptr, ec] { std::from_chars(ps, ps_end, result, 10) };
-        if (ptr == ps_end && ec == std::errc()) {
+        if (ps != ps_end && isdigit((unsigned char) *ps)) {
+            result = strtoul(ps, &ptr, 10);
+        }
+        if (ptr == ps_end) {
             poll_eventid = result;
         } else if (poll_status.empty() || site.status() == poll_status) {
             poll_eventid = site.eventid();
@@ -819,7 +822,7 @@ tamed void directory_watcher(const char* update_directory) {
                     sa.adjust_length(r);
                 }
                 Json j = Json::parse(sa.take_string());
-                if (j && j["conference"].is_s() && Site::status_update_valid(j)) {
+                if (j && j["conference"].is_s()) {
                     Site& site = make_site(j["conference"].to_s());
                     site.update(j, Site::source_filesystem, 0);
                     unlinkat(dirfd, x->name, 0);
