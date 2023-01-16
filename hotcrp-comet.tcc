@@ -786,10 +786,13 @@ void hotcrp_comet_status_handler(Json& resj) {
         .set("nconnections", nconnections)
         .set("connection_limit", connection_limit);
 
-    Json sitesj = Json();
+    Json sitesj = Json::make_array();
     for (auto it = sites.begin(); it != sites.end(); ++it) {
-        sitesj[it->first] = it->second.status_json();
+        sitesj.push_back(it->second.status_json());
     }
+    std::sort(sitesj.abegin(), sitesj.aend(), [](const Json& a, const Json& b) {
+        return a.get("event_age_min").as_d() < b.get("event_age_min").as_d();
+    });
     resj.set("sites", sitesj);
 
     Json connj = Json();
