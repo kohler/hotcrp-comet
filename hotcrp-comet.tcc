@@ -29,7 +29,7 @@
 static constexpr double connection_timeout = 20;
 static constexpr unsigned site_validate_timeout = 120;
 static constexpr unsigned site_error_validate_timeout = 1;
-static constexpr double user_validate_timeout = 120;
+static constexpr double user_validate_timeout = 3600;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
 static int verify_port = 0;
@@ -189,9 +189,10 @@ class Site : public tamer::tamed_class {
     double created_at_;
     double eventid_at_ = 0.0;
     double validate_at_ = 0.0;
+    bool validating_ = false;
     int validate_fail_ = 0;
+    tamer::event<> validate_event_;
     double pulse_at_ = 0.0;
-    tamer::event<> status_check_;
     tamer::event<> status_change_;
     unsigned long long npoll_ = 0;
     unsigned long long npoll_noblock_ = 0;
@@ -249,8 +250,8 @@ Json Site::status_json() const {
         j.set("nbad_request", nbadreq_);
     }
     j.set("npollers", npollers_);
-    if (status_check_) {
-        j.set("status_check", true);
+    if (validating_) {
+        j.set("validating", true);
     }
     return j;
 }
@@ -405,13 +406,11 @@ tamed void Site::validate(tamer::event<> done) {
     }
 
     // is status already being checked?
-    {
-        bool checking = !!status_check_;
-        status_check_ += std::move(done);
-        if (checking) {
-            return;
-        }
+    validate_event_ += std::move(done);
+    if (validating_) {
+        return;
     }
+    validating_ = true;
 
     twait {
         send(make_api_path("trackerstatus"), make_event(j));
@@ -419,7 +418,8 @@ tamed void Site::validate(tamer::event<> done) {
 
     update(j, source_validate, prev_eventid);
     validate_at_ = tamer::drecent();
-    status_check_();
+    validating_ = false;
+    validate_event_();
 }
 
 tamed void Site::check_user(std::vector<tamer::http_header> cookies,
