@@ -27,8 +27,8 @@
 #define MAX_NPOLLFDS 5
 
 static double connection_timeout = 20;
-static double site_validate_timeout = 120;
-static double site_error_validate_timeout = 5;
+static unsigned site_validate_timeout = 120;
+static unsigned site_error_validate_timeout = 1;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
 static uint16_t verify_port = 0;
@@ -187,6 +187,7 @@ class Site : public tamer::tamed_class {
     double create_at_;
     double eventid_at_ = 0.0;
     double validate_at_ = 0.0;
+    int validate_fail_ = 0;
     double pulse_at_ = 0.0;
     tamer::event<> status_check_;
     tamer::event<> status_change_;
@@ -257,8 +258,12 @@ inline bool Site::is_valid() const {
         || recent_poll_noblock_ > 20) {
         return false;
     }
-    double to = eventid_ ? site_error_validate_timeout : site_validate_timeout;
-    return tamer::drecent() - validate_at_ < to;
+    double elapsed = tamer::drecent() - validate_at_;
+    if (validate_fail_ > 0) {
+        return elapsed < (site_error_validate_timeout << (validate_fail_ - 1));
+    } else {
+        return elapsed < site_validate_timeout;
+    }
 }
 
 bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
@@ -267,13 +272,18 @@ bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
         || (!update_token.empty() && j["token"] != update_token)
         || !j["tracker_eventid"].is_u()) {
         ++nupfail_[source];
+        if (source == source_validate) {
+            validate_fail_ = std::min(validate_fail_ + 1, 7);
+        }
         return false;
     }
+
     uint64_t eventid = j["tracker_eventid"].to_u();
     if (eventid < eventid_
         && (source != source_validate || eventid_ != prev_eventid)) {
         return false;
     }
+    validate_fail_ = 0;
 
     if (eventid == eventid_) {
         if (j["pulse"]) {
@@ -361,7 +371,13 @@ tamed void Site::send(std::string path,
         if (!hp.ok()) {
             log_msg() << host_ << path << ": error " << http_errno_name(hp.error());
         } else {
-            log_msg() << host_ << path << ": bad tracker status " << res.body();
+            std::string body = res.body();
+            if (body.empty()) {
+                body = "<empty>";
+            } else {
+                body.erase(body.find_last_not_of(" \r\n\t\v\f") + 1);
+            }
+            log_msg() << host_ << path << ": bad tracker status " << body;
         }
     }
     if (!hp.should_keep_alive() && cfd) {
