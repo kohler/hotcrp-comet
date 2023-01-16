@@ -97,27 +97,31 @@ Json::ObjectJson::~ObjectJson()
 
 void Json::ObjectJson::grow(bool copy)
 {
-    if (copy && !capacity_)
+    if (copy && !capacity_) {
         return;
-    int new_capacity;
-    if (copy)
-        new_capacity = capacity_;
-    else if (capacity_)
-        new_capacity = capacity_ * 2;
-    else
-        new_capacity = 8;
-    ObjectItem *new_os = reinterpret_cast<ObjectItem *>(operator new[](sizeof(ObjectItem) * new_capacity));
-    ObjectItem *ob = os_, *oe = ob + n_;
-    for (ObjectItem *oi = new_os; ob != oe; ++oi, ++ob) {
-        if (ob->next_ == -2)
-            oi->next_ = -2;
-        else if (copy)
-            new((void*) oi) ObjectItem(ob->v_.first, ob->v_.second, ob->next_);
-        else
-            memcpy(oi, ob, sizeof(ObjectItem));
     }
-    if (!copy)
+    int new_capacity;
+    if (copy) {
+        new_capacity = capacity_;
+    } else if (capacity_) {
+        new_capacity = capacity_ * 2;
+    } else {
+        new_capacity = 8;
+    }
+    ObjectItem* new_os = reinterpret_cast<ObjectItem*>(operator new[](sizeof(ObjectItem) * new_capacity));
+    ObjectItem* ob = os_, *oe = ob + n_;
+    for (ObjectItem *oi = new_os; ob != oe; ++oi, ++ob) {
+        if (ob->next_ == -2) {
+            oi->next_ = -2;
+        } else if (copy) {
+            new((void*) oi) ObjectItem(ob->v_.first, ob->v_.second, ob->next_);
+        } else {
+            memcpy(oi, ob, sizeof(ObjectItem));
+        }
+    }
+    if (!copy) {
         operator delete[](reinterpret_cast<void *>(os_));
+    }
     os_ = new_os;
     capacity_ = new_capacity;
 }

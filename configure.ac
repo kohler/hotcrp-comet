@@ -109,22 +109,32 @@ KVDB_CHECK_BUILTIN([__sync_lock_release_set],
 
 
 dnl
-dnl C++11 features
+dnl C++17 features
 dnl
+
 SAVE_CXX="$CXX"
 if test -n "$GCC"; then CXX="$CXX -Werror"; fi
+
+AC_MSG_CHECKING([whether the C++ compiler supports C++17])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#if __cplusplus >= 201703L
+int f() { return 0; }
+#endif]], [[return f();]])],
+    [ac_cv_cxx17=yes], [ac_cv_cxx17=no])
+AC_MSG_RESULT([$ac_cv_cxx17])
+if test "$ac_cv_cxx17" != yes; then
+    SAVE_CXX="${SAVE_CXX} -std=gnu++20"
+    CXX="${CXX} -std=gnu++20"
+    AC_MSG_CHECKING([whether the C++ compiler with -std=gnu++20 supports C++20])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#if __cplusplus >= 202002L
+int f() { return 0; }
+#endif]], [[return f();]])],
+        [ac_cv_cxx17=yes], [ac_cv_cxx17=no])
+    AC_MSG_RESULT([$ac_cv_cxx17])
+fi
 
 AC_CACHE_CHECK([whether the C++ compiler understands rvalue references], [ac_cv_cxx_rvalue_references], [
     AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int &) { return 1; } int f(int &&) { return 0; }]], [[return f(int());]])],
 	[ac_cv_cxx_rvalue_references=yes], [ac_cv_cxx_rvalue_references=no])])
-if test "$ac_cv_cxx_rvalue_references" != yes; then
-    SAVE_CXX="${SAVE_CXX} -std=gnu++17"
-    CXX="${SAVE_CXX} -Werror"
-    AC_MSG_CHECKING([whether the C++ compiler with -std=gnu++17 understands rvalue refs])
-    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[int f(int &) { return 1; } int f(int &&) { return 0; }]], [[return f(int());]])],
-	[ac_cv_cxx_rvalue_references=yes], [ac_cv_cxx_rvalue_references=no])
-    AC_MSG_RESULT([$ac_cv_cxx_rvalue_references])
-fi
 if test "$ac_cv_cxx_rvalue_references" = yes; then
     AC_DEFINE([TAMER_HAVE_CXX_RVALUE_REFERENCES], [1], [Define if the C++ compiler understands rvalue references.])
 fi
@@ -135,15 +145,16 @@ AC_MSG_RESULT([$ac_cv_std_move])
 
 AC_MSG_CHECKING([for variadic templates])
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <utility>
-template <typename... TS> struct foo { enum { count = sizeof...(TS) }; };], [[long x = foo<>::count + foo<int, int, int, int, int>::count; (void) x;]])], [ac_cv_variadic_templates=yes], [ac_cv_variadic_templates=no])
+#include <cstddef>
+template <typename... TS> struct foo { static constexpr size_t count = sizeof...(TS); };], [[long x = foo<>::count + foo<int, int, int, int, int>::count; (void) x;]])], [ac_cv_variadic_templates=yes], [ac_cv_variadic_templates=no])
 AC_MSG_RESULT([$ac_cv_variadic_templates])
 
-if test "$ac_cv_std_move" != yes -o "$ac_cv_variadic_templates" != yes; then
+if test "$ac_cv_std_move" != yes -o "$ac_cv_variadic_templates" != yes -o "$ac_cv_cxx17" != yes; then
     AC_MSG_ERROR([
 
-The C++ compiler does not appear to understand C++17.
+The C++ compiler does not appear to understand C++20.
 To fix this problem, try supplying a "CXX" argument to ./configure,
-such as "./configure CXX='c++ -std=gnu++17'".
+such as "./configure CXX='c++ -std=gnu++20'".
 If you are using clang on Mac, ensure the '-stdlib=libc++' option.
 ])
 fi

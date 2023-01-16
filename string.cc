@@ -974,11 +974,11 @@ hard_printable(const String &s, int pos, int type)
             if (x[pos] >= 9 && x[pos] <= 13)
                 sa << '\\' << ("tnvfr"[x[pos] - 9]);
             else if (char *buf = sa.extend(4, 1))
-                snprintf(buf, 4, "\\%03o", x[pos]);
+                snprintf(buf, 5, "\\%03o", x[pos]);
         } else if (x[pos] < 32 && type != 1)
             sa << '^' << (unsigned char)(x[pos] + 64);
         else if (char *buf = sa.extend(4, 1))
-            snprintf(buf, 4, "\\%03o", x[pos]);
+            snprintf(buf, 5, "\\%03o", x[pos]);
     }
     return sa.take_string();
 }
