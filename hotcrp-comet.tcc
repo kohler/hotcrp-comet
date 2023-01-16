@@ -791,7 +791,15 @@ void hotcrp_comet_status_handler(Json& resj) {
         sitesj.push_back(it->second.status_json());
     }
     std::sort(sitesj.abegin(), sitesj.aend(), [](const Json& a, const Json& b) {
-        return a.get("event_age_min").as_d() < b.get("event_age_min").as_d();
+        Json aage = a.get("event_age_min"), bage = b.get("event_age_min");
+        bool anull = aage.is_null(), bnull = bage.is_null();
+        if (anull && bnull) {
+            return a.get("site").as_s() < b.get("site").as_s();
+        } else if (anull || bnull) {
+            return bnull;
+        } else {
+            return aage.as_d() < bage.as_d();
+        }
     });
     resj.set("sites", sitesj);
 
