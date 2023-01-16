@@ -26,9 +26,10 @@
 #define MAX_LOGLEVEL LOG_DEBUG
 #define MAX_NPOLLFDS 5
 
-static double connection_timeout = 20;
-static unsigned site_validate_timeout = 120;
-static unsigned site_error_validate_timeout = 1;
+static constexpr double connection_timeout = 20;
+static constexpr unsigned site_validate_timeout = 120;
+static constexpr unsigned site_error_validate_timeout = 1;
+static constexpr double user_validate_timeout = 120;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
 static uint16_t verify_port = 0;
@@ -442,6 +443,100 @@ bool check_conference(std::string arg, tamer::http_message& conf_m) {
 }
 
 
+struct user_map {
+    double timestamp = 0.0;
+    double used_at = 0.0;
+    char firstch = 0;
+    bool locked = true;
+    std::vector<tamer::http_header> cookies;
+    std::string user;
+
+    bool cookies_equal(const std::vector<tamer::http_header>& xcookies) const {
+        if (cookies.size() != xcookies.size()) {
+            return false;
+        }
+        auto i1 = cookies.begin();
+        auto i2 = xcookies.begin();
+        auto last = cookies.end();
+        while (i1 != last && i1->name == i2->name && i1->value == i2->value) {
+            ++i1;
+            ++i2;
+        }
+        return i1 == last;
+    }
+};
+
+static std::vector<user_map> users;
+static constexpr size_t max_users_size = 2048;
+
+tamed void lookup_user(Site& site, std::vector<tamer::http_header> cookies,
+                       tamer::event<std::string> done) {
+    tamed {
+        tamer::destroy_guard guard(&site);
+        char firstch = 0;
+        size_t oldi = -1;
+        bool ok;
+        std::string user;
+        double now = tamer::drecent();
+    }
+
+    // no cookies -> no user
+    if (cookies.empty()) {
+        done("");
+        return;
+    }
+
+    // search for match
+    {
+        size_t pos = cookies[0].value.find('=');
+        if (pos < cookies[0].value.length()) {
+            firstch = cookies[0].value[pos + 1];
+        }
+
+        double oldt = now;
+        double expiry = now - user_validate_timeout;
+        for (size_t i = 0; i != users.size(); ++i) {
+            if (users[i].firstch == firstch
+                && users[i].timestamp > expiry
+                && users[i].cookies_equal(cookies)) {
+                users[i].used_at = now;
+                done(users[i].user);
+                return;
+            }
+            if (users[i].used_at < oldt
+                && !users[i].locked) {
+                oldi = i;
+                oldt = users[i].used_at;
+            }
+        }
+
+        if (users.size() == max_users_size
+            && oldi == (size_t) -1) {
+            done("");
+            return;
+        }
+
+        if (oldi == (size_t) -1
+            || (users[oldi].used_at >= expiry && users.size() < max_users_size)) {
+            users.emplace_back();
+            oldi = users.size() - 1;
+        }
+
+        users[oldi].locked = true;
+        users[oldi].timestamp = users[oldi].used_at = now;
+        users[oldi].firstch = firstch;
+        std::swap(users[oldi].cookies, cookies);
+    }
+
+    twait {
+        site.check_user(users[oldi].cookies, tamer::make_event(ok, user));
+    }
+
+    users[oldi].locked = false;
+    users[oldi].user = user;
+    done(user);
+}
+
 
 class Connection : public tamer::tamed_class {
  public:
@@ -461,8 +556,8 @@ class Connection : public tamer::tamed_class {
     tamer::http_parser hp_;
     tamer::http_message req_;
     tamer::http_message res_;
-    std::string user_;
-    double user_checked_at_ = 0.0;
+    std::string recent_user_;
+    std::string recent_site_;
     Json resj_;
     int resj_indent_;
     double created_at_;
@@ -565,8 +660,11 @@ Json Connection::status_json() const {
     if (state_ >= 0) {
         j.set("state", stati[state_]);
     }
-    if (!user_.empty()) {
-        j.set("user", user_);
+    if (!recent_site_.empty()) {
+        j.set("site", recent_site_);
+    }
+    if (!recent_user_.empty()) {
+        j.set("user", recent_user_);
     }
     return j;
 }
@@ -583,7 +681,7 @@ double poll_timeout(double timeout) {
 
 tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     tamed {
-        Site& site = make_site(req_.query("conference"));
+        Site& site = make_site(recent_site_);
         tamer::destroy_guard guard(&site);
         uint64_t poll_eventid = 0;
         double start_at = tamer::drecent();
@@ -652,7 +750,7 @@ void Connection::update_handler() {
     if (!req_.query("token").empty()) {
         j.set("token", req_.query("token"));
     }
-    Site& site = make_site(req_.query("conference"));
+    Site& site = make_site(recent_site_);
     if (site.update(j, Site::source_update, 0)) {
         resj_.set("ok", true);
     } else {
@@ -662,23 +760,15 @@ void Connection::update_handler() {
 }
 
 tamed void Connection::check_user() {
-    tamed {
-        bool ok;
-        std::string user;
-    }
     twait {
-        Site& site = make_site(req_.query("conference"));
+        Site& site = make_site(recent_site_);
         std::vector<tamer::http_header> cookies;
         for (auto it = req_.header_begin(); it != req_.header_end(); ++it) {
             if (it->is_canonical("cookie"))
                 cookies.push_back(*it);
         }
-        site.check_user(std::move(cookies), tamer::make_event(ok, user));
+        lookup_user(site, cookies, tamer::make_event(recent_user_));
     }
-    if (ok) {
-        user_ = user;
-    }
-    user_checked_at_ = tamer::drecent();
 }
 
 void hotcrp_comet_status_handler(Json& resj) {
@@ -738,8 +828,8 @@ tamed void Connection::handler() {
             hotcrp_comet_status_handler(resj_);
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
+            recent_site_ = req_.query("conference");
             if (req_.has_canonical_header("cookie")
-                && tamer::drecent() - user_checked_at_ > 600
                 && verbose) {
                 check_user();
             }
