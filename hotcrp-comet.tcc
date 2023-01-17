@@ -756,13 +756,42 @@ void Connection::update_handler() {
     hp_.clear_should_keep_alive();
 }
 
+static void append_cookie_header(std::vector<tamer::http_header>& cookies,
+                                 std::string value) {
+    size_t n = 0;
+    while ((n = value.find("hotlist-info-", n)) != std::string::npos) {
+        size_t p = n;
+        while (p != 0 && isspace((unsigned char) value[p - 1])) {
+            --p;
+        }
+        if (p == 0 || value[p - 1] == ';') {
+            size_t semi = value.find(';', n + 13);
+            if (p == 0) {
+                while (semi < value.length()
+                       && (value[semi] == ';' || isspace((unsigned char) value[semi]))) {
+                    ++semi;
+                }
+                value.erase(p, semi);
+            } else {
+                value.erase(p - 1, semi);
+            }
+            n = p;
+        } else {
+            ++n;
+        }
+    }
+    if (!value.empty()) {
+        cookies.push_back(tamer::http_header("Cookie", std::move(value)));
+    }
+}
+
 tamed void Connection::check_user() {
     twait {
         Site& site = make_site(recent_site_);
         std::vector<tamer::http_header> cookies;
         for (auto it = req_.header_begin(); it != req_.header_end(); ++it) {
             if (it->is_canonical("cookie"))
-                cookies.push_back(*it);
+                append_cookie_header(cookies, it->value);
         }
         lookup_user(site, cookies, tamer::make_event(recent_user_));
     }
