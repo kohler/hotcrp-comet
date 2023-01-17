@@ -703,7 +703,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     }
     site.add_poller();
 
-    while (cfd_
+    while (!cfd_.write_closed()
            && tamer::drecent() < timeout_at
            && state_ == s_poll
            && (site.eventid() == poll_eventid || !site.is_valid())) {
@@ -711,6 +711,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
+            tamer::at_fd_write(cfd_.fdnum(), poll_event_);
             site.wait(poll_eventid, poll_event_);
         }
     }
