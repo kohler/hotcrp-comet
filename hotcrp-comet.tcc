@@ -39,6 +39,7 @@ static tamer::fd statusserverfd;
 static tamer::fd watchfd;
 static unsigned nconnections;
 static unsigned connection_limit;
+static unsigned npolls;
 static int pidfd = -1;
 static std::ostream* logs;
 static std::ostream* logerrs;
@@ -702,6 +703,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         }
     }
     site.add_poller();
+    ++npolls;
 
     while (!cfd_.write_closed()
            && tamer::drecent() < timeout_at
@@ -726,6 +728,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     }
     hp_.clear_should_keep_alive();
     site.resolve_poller(blocked);
+    --npolls;
     done();
 }
 
@@ -848,7 +851,7 @@ tamed void Connection::handler() {
             break;
         }
         if (loglevel >= LOG_VERBOSE) {
-            log_msg(LOG_VERBOSE) << "< " << http_method_str(req_.method()) << " " << req_.url();
+            log_msg(LOG_VERBOSE) << "< " << http_method_str(req_.method()) << " " << req_.url() << " [" << npolls << "]";
         }
         res_.error(HPE_PAUSED)
             .header("Access-Control-Allow-Origin", "*")
