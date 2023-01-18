@@ -771,10 +771,10 @@ static void append_cookie_header(std::vector<tamer::http_header>& cookies,
                        && (value[semi] == ';' || isspace((unsigned char) value[semi]))) {
                     ++semi;
                 }
-                value.erase(p, semi);
             } else {
-                value.erase(p - 1, semi);
+                --p;
             }
+            value.erase(p, semi - p);
             n = p;
         } else {
             ++n;
