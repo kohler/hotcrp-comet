@@ -756,33 +756,30 @@ void Connection::update_handler() {
     hp_.clear_should_keep_alive();
 }
 
-static void append_cookie_header(std::vector<tamer::http_header>& cookies,
-                                 std::string value) {
-    size_t n = 0;
-    while ((n = value.find("hotlist-info-", n)) != std::string::npos) {
-        size_t p = n;
-        while (p != 0 && isspace((unsigned char) value[p - 1])) {
-            --p;
-        }
-        if (p == 0 || value[p - 1] == ';') {
-            size_t semi = value.find(';', n + 13);
-            if (p == 0) {
-                while (semi < value.length()
-                       && (value[semi] == ';' || isspace((unsigned char) value[semi]))) {
-                    ++semi;
-                }
-            } else {
-                --p;
+static size_t skip_semispace(const char* data, size_t n, size_t len) {
+    while (n != len && (data[n] == ';' || isspace((unsigned char) data[n]))) {
+        ++n;
+    }
+    return n;
+}
+
+static std::string strip_cookie_value(std::string value) {
+    size_t n = 0, len = value.length();
+    while (n != len) {
+        size_t p = skip_semispace(value.data(), n, len);
+        size_t semi = std::min(len, value.find(';', p));
+        if ((semi - p > 13 && value.compare(p, 13, "hotlist-info-") == 0)
+            || (semi - p > 13 && value.compare(p, 13, "hc-uredirect-") == 0)) {
+            if (n == 0) {
+                semi = skip_semispace(value.data(), semi, len);
             }
-            value.erase(p, semi - p);
-            n = p;
+            value.erase(n, semi - n);
+            len = value.length();
         } else {
-            ++n;
+            n = semi;
         }
     }
-    if (!value.empty()) {
-        cookies.push_back(tamer::http_header("Cookie", std::move(value)));
-    }
+    return value;
 }
 
 tamed void Connection::check_user() {
@@ -790,8 +787,12 @@ tamed void Connection::check_user() {
         Site& site = make_site(recent_site_);
         std::vector<tamer::http_header> cookies;
         for (auto it = req_.header_begin(); it != req_.header_end(); ++it) {
-            if (it->is_canonical("cookie"))
-                append_cookie_header(cookies, it->value);
+            if (it->is_canonical("cookie")) {
+                std::string value = strip_cookie_value(it->value);
+                if (!value.empty()) {
+                    cookies.push_back(tamer::http_header("Cookie", std::move(value)));
+                }
+            }
         }
         lookup_user(site, cookies, tamer::make_event(recent_user_));
     }
