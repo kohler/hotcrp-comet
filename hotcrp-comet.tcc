@@ -1237,7 +1237,7 @@ int main(int argc, char** argv) {
             log_msg(LOG_ERROR) << "listen: " << strerror(-serverfd.error());
             exit(1);
         }
-        log_msg(LOG_VERBOSE) << "listen http://localhost:" << port;
+        log_msg(LOG_VERBOSE) << "listen http://localhost:" << status_port << " for status";
         listener(statusserverfd, true);
     }
 
