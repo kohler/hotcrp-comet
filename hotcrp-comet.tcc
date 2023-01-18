@@ -1027,6 +1027,7 @@ static const Clp_Option options[] = {
     { "fg", 0, 0, 0, 0 },
     { "log", 0, 0, Clp_ValString, 0 },
     { "log-file", 0, 0, Clp_ValString, 0 },
+    { "log-stderr", 0, 0, Clp_ValString, 0 },
     { "log-level", 0, 0, Clp_ValInt, 0 },
     { "nfiles", 'n', 0, Clp_ValInt, 0 },
     { "pid-file", 0, 0, Clp_ValString, 0 },
@@ -1125,6 +1126,7 @@ int main(int argc, char** argv) {
     bool nfiles_set = false;
     const char* pid_filename = nullptr;
     const char* log_filename = nullptr;
+    bool log_stderr = false;
     const char* update_directory = nullptr;
     String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
@@ -1143,6 +1145,9 @@ int main(int argc, char** argv) {
             verify_port = clp->val.i;
         } else if (Clp_IsLong(clp, "pid-file")) {
             pid_filename = clp->val.s;
+        } else if (Clp_IsLong(clp, "log-stderr")) {
+            log_filename = clp->val.s;
+            log_stderr = true;
         } else if (Clp_IsLong(clp, "log-file") || Clp_IsLong(clp, "log")) {
             log_filename = clp->val.s;
         } else if (Clp_IsLong(clp, "log-level")) {
@@ -1170,7 +1175,13 @@ int main(int argc, char** argv) {
 
     // open log stream
     std::ofstream logf_stream;
-    if (log_filename) {
+    if (log_stderr) {
+        if (!freopen(log_filename, "a", stderr)) {
+            std::cerr << log_filename << ": " << strerror(errno) << "\n";
+            exit(1);
+        }
+        logs = &std::cerr;
+    } else if (log_filename) {
         logf_stream.open(log_filename, std::ofstream::app);
         if (logf_stream.bad()) {
             std::cerr << log_filename << ": " << strerror(errno) << "\n";
