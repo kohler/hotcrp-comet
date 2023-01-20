@@ -713,7 +713,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         twait {
             poll_event_ = tamer::add_timeout(timeout_at - tamer::drecent(),
                                              tamer::make_event());
-            tamer::at_fd_write(cfd_.fdnum(), poll_event_);
+            tamer::at_fd_shutdown(cfd_.fdnum(), poll_event_);
             site.wait(poll_eventid, poll_event_);
         }
     }
