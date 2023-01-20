@@ -47,6 +47,7 @@ static int loglevel;
 static std::vector<std::string> startup_fds;
 static String update_token;
 static bool verbose;
+static bool track_users;
 
 #define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
@@ -660,6 +661,9 @@ Json Connection::status_json() const {
     if (!recent_site_.empty()) {
         j.set("site", recent_site_);
     }
+    if (state_ == s_poll && !req_.query("poll").empty()) {
+        j.set("poll", req_.query("poll"));
+    }
     if (!recent_user_.empty()) {
         j.set("user", recent_user_);
     }
@@ -898,7 +902,7 @@ tamed void Connection::handler() {
         } else if (check_conference(req_.query("conference"), confurl)) {
             recent_site_ = req_.query("conference");
             if (req_.has_canonical_header("cookie")
-                && verbose) {
+                && track_users) {
                 check_user();
             }
             if (url_path.length() >= 7
@@ -1035,9 +1039,10 @@ static const Clp_Option options[] = {
     { "port", 'p', 0, Clp_ValInt, 0 },
     { "status-port", 0, 0, Clp_ValInt, 0 },
     { "token", 't', 0, Clp_ValString, 0 },
+    { "track-users", 0, 0, 0, Clp_Negate },
     { "update-directory", 0, 0, Clp_ValString, 0 },
     { "user", 'u', 0, Clp_ValString, 0 },
-    { "verbose", 'V', 0, 0, 0 },
+    { "verbose", 'V', 0, 0, Clp_Negate },
     { "verify-port", 'P', 0, Clp_ValInt, 0 }
 };
 
@@ -1130,6 +1135,8 @@ int main(int argc, char** argv) {
     const char* pid_filename = nullptr;
     const char* log_filename = nullptr;
     bool log_stderr = false;
+    bool have_loglevel = false;
+    bool have_track_users = false;
     const char* update_directory = nullptr;
     String userarg;
     Clp_Parser* clp = Clp_NewParser(argc, argv, sizeof(options)/sizeof(options[0]), options);
@@ -1155,6 +1162,10 @@ int main(int argc, char** argv) {
             log_filename = clp->val.s;
         } else if (Clp_IsLong(clp, "log-level")) {
             loglevel = std::max(0, std::min(MAX_LOGLEVEL, clp->val.i));
+            have_loglevel = true;
+        } else if (Clp_IsLong(clp, "track-users")) {
+            track_users = !clp->negated;
+            have_track_users = true;
         } else if (Clp_IsLong(clp, "token")) {
             update_token = clp->val.s;
         } else if (Clp_IsLong(clp, "update-directory")) {
@@ -1162,13 +1173,18 @@ int main(int argc, char** argv) {
         } else if (Clp_IsLong(clp, "user")) {
             userarg = clp->val.s;
         } else if (Clp_IsLong(clp, "verbose")) {
-            verbose = true;
-            loglevel = std::max(loglevel, LOG_VERBOSE);
+            verbose = !clp->negated;
         } else if (opt != Clp_Done) {
             usage();
         } else {
             break;
         }
+    }
+    if (verbose && !have_loglevel) {
+        loglevel = std::max(loglevel, LOG_VERBOSE);
+    }
+    if (verbose && !have_track_users) {
+        track_users = true;
     }
 
     tamer::initialize();
