@@ -1057,10 +1057,12 @@ static pid_t maybe_fork(bool dofork) {
         }
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+        if (logs != &std::cerr) {
+            close(STDERR_FILENO);
+            logerrs = nullptr;
+        }
         setpgid(0, 0);
         signal(SIGHUP, SIG_IGN);
-        logerrs = nullptr;
     }
     return getpid();
 }
@@ -1192,7 +1194,7 @@ int main(int argc, char** argv) {
     } else if (fg) {
         logs = &std::cerr;
     }
-    if (logs != &std::cerr) {
+    if (logs != &std::cerr || log_stderr) {
         logerrs = &std::cerr;
     }
 
