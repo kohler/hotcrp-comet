@@ -662,7 +662,10 @@ Json Connection::status_json() const {
         j.set("site", recent_site_);
     }
     if (state_ == s_poll && !req_.query("poll").empty()) {
-        j.set("poll", req_.query("poll"));
+        j.set("eventid", req_.query("poll"));
+    }
+    if (state_ == s_poll && !req_.query("uuid").empty()) {
+        j.set("uuid", req_.query("uuid"));
     }
     if (!recent_user_.empty()) {
         j.set("user", recent_user_);
