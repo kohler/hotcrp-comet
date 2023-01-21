@@ -8,7 +8,6 @@
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cctype>
 #include <pwd.h>
@@ -654,12 +653,16 @@ void Connection::clear_one(Connection* dont_clear) {
 }
 
 static eventid_t parse_poll_status(const std::string& str) {
-    eventid_t result;
-    auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.length(), result, 10);
-    if (ec != std::errc() || ptr != str.data() + str.length() || str.empty()) {
-        result = (eventid_t) -1;
+    eventid_t result = 0;
+    const char* s = str.data();
+    const char* ends = s + str.length();
+    while (s != ends
+           && isdigit((unsigned char) *s)
+           && result < (eventid_t) 0x1000'0000'0000'0000ULL) {
+        result = 10 * result + *s - '0';
+        ++s;
     }
-    return result;
+    return s == ends && !str.empty() ? result : (eventid_t) -1;
 }
 
 Json Connection::status_json() const {
