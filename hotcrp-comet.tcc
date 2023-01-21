@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cctype>
 #include <pwd.h>
@@ -48,6 +49,7 @@ static std::vector<std::string> startup_fds;
 static String update_token;
 static bool verbose;
 static bool track_users;
+using eventid_t = uint64_t;
 
 #define TIMESTAMP_FMT "%Y-%m-%d %H:%M:%S %z"
 
@@ -130,7 +132,7 @@ class Site : public tamer::tamed_class {
     inline constexpr double status_at() const {
         return status_at_;
     }
-    inline uint64_t eventid() const {
+    inline eventid_t eventid() const {
         return eventid_;
     }
     inline bool is_valid() const;
@@ -140,7 +142,7 @@ class Site : public tamer::tamed_class {
         source_update = 1,
         source_filesystem = 2
     };
-    bool update(const Json& j, source_type source, uint64_t old_eventid);
+    bool update(const Json& j, source_type source, eventid_t old_eventid);
 
     std::string make_api_path(std::string fn, std::string rest = std::string());
 
@@ -148,7 +150,7 @@ class Site : public tamer::tamed_class {
     tamed void check_user(std::vector<tamer::http_header> cookies,
                           tamer::event<bool, std::string> done);
 
-    void wait(uint64_t eventid, tamer::event<> done) {
+    void wait(eventid_t eventid, tamer::event<> done) {
         if (!is_valid()) {
             validate(std::move(done));
         } else if (eventid != eventid_) {
@@ -178,7 +180,7 @@ class Site : public tamer::tamed_class {
     uint16_t port_;
     std::string path_;
     std::string status_;
-    uint64_t eventid_ = 0;
+    eventid_t eventid_ = 0;
     double status_at_ = 0.0;
     double created_at_;
     double eventid_at_ = 0.0;
@@ -262,7 +264,7 @@ inline bool Site::is_valid() const {
     }
 }
 
-bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
+bool Site::update(const Json& j, source_type source, eventid_t prev_eventid) {
     if (!j.is_o()
         || !j["ok"]
         || (!update_token.empty() && j["token"] != update_token)
@@ -274,7 +276,7 @@ bool Site::update(const Json& j, source_type source, uint64_t prev_eventid) {
         return false;
     }
 
-    uint64_t eventid = j["tracker_eventid"].to_u();
+    eventid_t eventid = j["tracker_eventid"].to_u();
     if (eventid < eventid_
         && (source != source_validate || eventid_ != prev_eventid)) {
         return false;
@@ -390,7 +392,7 @@ void Site::send(std::string path, tamer::event<Json> done) {
 
 tamed void Site::validate(tamer::event<> done) {
     tamed {
-        uint64_t prev_eventid = eventid_;
+        eventid_t prev_eventid = eventid_;
         Json j;
     }
 
@@ -651,6 +653,15 @@ void Connection::clear_one(Connection* dont_clear) {
     }
 }
 
+static eventid_t parse_poll_status(const std::string& str) {
+    eventid_t result;
+    auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.length(), result, 10);
+    if (ec != std::errc() || ptr != str.data() + str.length() || str.empty()) {
+        result = (eventid_t) -1;
+    }
+    return result;
+}
+
 Json Connection::status_json() const {
     static const char* stati[] = {"request", "poll", "response"};
     Json j = Json().set("fd", cfd_.fdnum())
@@ -662,7 +673,13 @@ Json Connection::status_json() const {
         j.set("site", recent_site_);
     }
     if (state_ == s_poll && !req_.query("poll").empty()) {
-        j.set("eventid", req_.query("poll"));
+        std::string poll_status = req_.query("poll");
+        auto ipoll = parse_poll_status(poll_status);
+        if (ipoll != (eventid_t) -1) {
+            j.set("eventid", ipoll);
+        } else {
+            j.set("eventid", poll_status);
+        }
     }
     if (state_ == s_poll && !req_.query("uuid").empty()) {
         j.set("uuid", req_.query("uuid"));
@@ -687,22 +704,16 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     tamed {
         Site& site = make_site(recent_site_);
         tamer::destroy_guard guard(&site);
-        uint64_t poll_eventid = 0;
+        eventid_t poll_eventid = 0;
         double start_at = tamer::drecent();
         double timeout_at = start_at + poll_timeout(timeout);
         bool blocked = false;
     }
     {
         std::string poll_status = req_.query("poll");
-        const char* ps = poll_status.c_str();
-        const char* ps_end = ps + poll_status.length();
-        char* ptr = nullptr;
-        uint64_t result = 0;
-        if (ps != ps_end && isdigit((unsigned char) *ps)) {
-            result = strtoul(ps, &ptr, 10);
-        }
-        if (ptr == ps_end) {
-            poll_eventid = result;
+        eventid_t ipoll = parse_poll_status(poll_status);
+        if (ipoll != (eventid_t) -1) {
+            poll_eventid = ipoll;
         } else if (poll_status.empty() || site.status() == poll_status) {
             poll_eventid = site.eventid();
         } else {
@@ -899,8 +910,12 @@ tamed void Connection::handler() {
         resj_.clear();
         resj_indent_ = 0;
         url_path = req_.url_path();
-        if (url_path == "/status" && allow_status_) {
-            hotcrp_comet_status_handler(resj_);
+        if (url_path == "/status") {
+            if (allow_status_) {
+                hotcrp_comet_status_handler(resj_);
+            } else {
+                resj_.set("ok", true);
+            }
             resj_indent_ = 2;
         } else if (check_conference(req_.query("conference"), confurl)) {
             recent_site_ = req_.query("conference");
@@ -931,7 +946,7 @@ tamed void Connection::handler() {
         }
         // if (!res_.ok())
         //    res_.status_code(503);
-        res_.body(resj_.unparse(Json::indent_depth(resj_indent_).newline_terminator(true)));
+        res_.body(resj_.unparse(Json::unparse_manipulator().indent_depth(resj_indent_).tab_width(2).newline_terminator(true)));
         set_state(s_response);
         twait { hp_.send_response(cfd_, res_, tamer::make_event()); }
         if (!hp_.should_keep_alive()) {
