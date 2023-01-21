@@ -816,7 +816,35 @@ tamed void Connection::check_user() {
     }
 }
 
-void hotcrp_comet_status_handler(Json& resj) {
+Json status_handler_user_cache() {
+    Json usersj = Json();
+    for (auto it = users.begin(); it != users.end(); ++it) {
+        if (!it->locked) {
+            Json uj = Json().set("user", it->user);
+            std::string cookie;
+            for (auto cit = it->cookies.begin(); cit != it->cookies.end(); ++cit) {
+                if (cookie.empty()) {
+                    cookie = cit->value;
+                } else {
+                    cookie += "; ";
+                    cookie += cit->value;
+                }
+            }
+            uj.set("cookie", cookie);
+            set_age_minutes(uj, "age_min", it->timestamp);
+            if (it->nused > 0) {
+                uj.set("nused", it->nused);
+            }
+            usersj.push_back(uj);
+        }
+    }
+    std::sort(usersj.abegin(), usersj.aend(), [](const Json& a, const Json& b) {
+        return a.get("age_min").as_d() < b.get("age_min").as_d();
+    });
+    return usersj;
+}
+
+void status_handler(Json& resj) {
     resj.set("at", tamer::drecent())
         .set("at_time", timestamp_string(tamer::drecent()))
         .set("nconnections", nconnections)
@@ -849,31 +877,8 @@ void hotcrp_comet_status_handler(Json& resj) {
     });
     resj.set("connections", connj);
 
-    if (!users.empty()) {
-        Json usersj = Json();
-        for (auto it = users.begin(); it != users.end(); ++it) {
-            if (!it->locked) {
-                Json uj = Json().set("user", it->user);
-                std::string cookie;
-                for (auto cit = it->cookies.begin(); cit != it->cookies.end(); ++cit) {
-                    if (cookie.empty()) {
-                        cookie = cit->value;
-                    } else {
-                        cookie += "; ";
-                        cookie += cit->value;
-                    }
-                }
-                uj.set("cookie", cookie);
-                set_age_minutes(uj, "age_min", it->timestamp);
-                if (it->nused > 0) {
-                    uj.set("nused", it->nused);
-                }
-                usersj.push_back(uj);
-            }
-        }
-        std::sort(usersj.abegin(), usersj.aend(), [](const Json& a, const Json& b) {
-            return a.get("age_min").as_d() < b.get("age_min").as_d();
-        });
+    if (!users.empty() && false) {
+        Json usersj = status_handler_user_cache();
         if (!usersj.empty()) {
             resj.set("user_cache", usersj);
         }
@@ -912,7 +917,7 @@ tamed void Connection::handler() {
         url_path = req_.url_path();
         if (url_path == "/status") {
             if (allow_status_) {
-                hotcrp_comet_status_handler(resj_);
+                status_handler(resj_);
             } else {
                 resj_.set("ok", true);
             }
