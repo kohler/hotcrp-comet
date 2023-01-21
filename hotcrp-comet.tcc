@@ -739,9 +739,11 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
     if (!site.status().empty()) {
         resj_.set("ok", true)
             .set("at", tamer::drecent())
-            .set("tracker_status", site.status())
-            .set("tracker_status_at", site.status_at())
             .set("tracker_eventid", site.eventid());
+        if (!req_.query("tracker_status_at").empty()) { // XXX backward compat
+            resj_.set("tracker_status", site.status())
+                .set("tracker_status_at", site.status_at());
+        }
     } else {
         resj_.set("ok", false);
     }
