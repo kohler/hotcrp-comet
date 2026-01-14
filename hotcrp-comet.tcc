@@ -128,9 +128,6 @@ class Site : public tamer::tamed_class {
     inline const std::string& status() const {
         return status_;
     }
-    inline constexpr double status_at() const {
-        return status_at_;
-    }
     inline eventid_t eventid() const {
         return eventid_;
     }
@@ -180,7 +177,6 @@ class Site : public tamer::tamed_class {
     std::string path_;
     std::string status_;
     eventid_t eventid_ = 0;
-    double status_at_ = 0.0;
     double created_at_;
     double eventid_at_ = 0.0;
     double validate_at_ = 0.0;
@@ -288,11 +284,6 @@ bool Site::update(const Json& j, source_type source, eventid_t prev_eventid) {
             status_ = j["tracker_status"].to_s();
         } else {
             status_ = std::string();
-        }
-        if (j["tracker_status_at"].is_d()) {
-            status_at_ = j["tracker_status_at"].to_d();
-        } else {
-            status_at_ = 0;
         }
         eventid_at_ = tamer::drecent();
         ++nupdate_[source];
@@ -743,10 +734,6 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         resj_.set("ok", true)
             .set("at", tamer::drecent())
             .set("tracker_eventid", site.eventid());
-        if (!req_.query("tracker_status_at").empty()) { // XXX backward compat
-            resj_.set("tracker_status", site.status())
-                .set("tracker_status_at", site.status_at());
-        }
     } else {
         resj_.set("ok", false);
     }
@@ -760,9 +747,6 @@ void Connection::update_handler() {
     Json j = Json().set("ok", true);
     if (!req_.query("tracker_status").empty()) {
         j.set("tracker_status", req_.query("tracker_status"));
-    }
-    if (!req_.query("tracker_status_at").empty()) {
-        j.set("tracker_status_at", Json::parse(req_.query("tracker_status_at")));
     }
     if (!req_.query("tracker_eventid").empty()) {
         j.set("tracker_eventid", Json::parse(req_.query("tracker_eventid")));
