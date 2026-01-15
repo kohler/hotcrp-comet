@@ -210,12 +210,15 @@ Site& make_site(const std::string& url) {
 }
 
 std::string Site::make_api_path(std::string fn, std::string rest) {
-    std::string path = path_ + "api.php?fn=" + fn;
-    if (!rest.empty()) {
-        path += "&" + rest;
-    }
+    std::string path = path_ + "api.php/" + fn;
     if (update_token) {
-        path += "&token=" + std::string(update_token.encode_uri_component());
+        if (!rest.empty()) {
+            rest += "&";
+        }
+        rest += "token=" + std::string(update_token.encode_uri_component());
+    }
+    if (!rest.empty()) {
+        path += "?" + rest;
     }
     return path;
 }
@@ -407,7 +410,7 @@ tamed void Site::check_user(std::vector<tamer::http_header> cookies,
                             tamer::event<bool, std::string> done) {
     tamed { Json j; }
     twait {
-        send(make_api_path("whoami", ""), cookies, make_event(j));
+        send(make_api_path("whoami"), cookies, make_event(j));
     }
     if (j.is_o() && j["ok"]) {
         done(true, j["email"].to_s());
