@@ -669,8 +669,8 @@ class Json::const_array_iterator { public:
 };
 
 class Json::array_iterator : public const_array_iterator { public:
-    typedef const Json* pointer;
-    typedef const Json& reference;
+    typedef Json* pointer;
+    typedef Json& reference;
 
     array_iterator() {
     }

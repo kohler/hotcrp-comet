@@ -830,7 +830,7 @@ Json status_handler_user_cache() {
             usersj.push_back(uj);
         }
     }
-    std::sort(usersj.abegin(), usersj.aend(), [](const Json& a, const Json& b) {
+    std::sort(usersj.abegin(), usersj.aend(), [](Json& a, Json& b) {
         return a.get("age_min").as_d() < b.get("age_min").as_d();
     });
     return usersj;
@@ -846,7 +846,7 @@ void status_handler(Json& resj) {
     for (auto it = sites.begin(); it != sites.end(); ++it) {
         sitesj.push_back(it->second.status_json());
     }
-    std::sort(sitesj.abegin(), sitesj.aend(), [](const Json& a, const Json& b) {
+    std::sort(sitesj.abegin(), sitesj.aend(), [](Json& a, Json& b) {
         Json aage = a.get("event_age_min"), bage = b.get("event_age_min");
         bool anull = aage.is_null(), bnull = bage.is_null();
         if (anull && bnull) {
@@ -864,7 +864,7 @@ void status_handler(Json& resj) {
         if (*it)
             connj.push_back((*it)->status_json());
     }
-    std::sort(connj.abegin(), connj.aend(), [](const Json& a, const Json& b) {
+    std::sort(connj.abegin(), connj.aend(), [](Json& a, Json& b) {
         return a.get("age").as_d() > b.get("age").as_d();
     });
     resj.set("connections", connj);

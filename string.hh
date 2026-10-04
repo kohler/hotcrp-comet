@@ -231,9 +231,9 @@ class String : public String_base<String> {
   private:
     /** @cond never */
     struct memo_type {
-        volatile uint32_t refcount;
+        uint32_t refcount;
         uint32_t capacity;
-        volatile uint32_t dirty;
+        uint32_t dirty;
 #if HAVE_STRING_PROFILING > 1
         memo_type** pprev;
         memo_type* next;
@@ -862,7 +862,7 @@ inline String operator+(String a, char b) {
     return a;
 }
 
-inline String operator"" _S(const char* s, size_t len) {
+inline String operator""_S(const char* s, size_t len) {
     return String::make_stable(s, s + len);
 }
 

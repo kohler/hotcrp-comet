@@ -5,7 +5,6 @@ AC_CONFIG_AUX_DIR([tamer])
 AC_PREREQ([2.69])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([GNUmakefile])
-AC_CONFIG_SUBDIRS([tamer])
 AC_SUBST([ac_configure_args])
 
 ac_user_cxx=${CXX+y}
@@ -115,21 +114,21 @@ dnl
 SAVE_CXX="$CXX"
 if test -n "$GCC"; then CXX="$CXX -Werror"; fi
 
-AC_MSG_CHECKING([whether the C++ compiler supports C++17])
+AC_MSG_CHECKING([whether the C++ compiler supports C++20])
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#if __cplusplus >= 201703L
 int f() { return 0; }
 #endif]], [[return f();]])],
-    [ac_cv_cxx17=yes], [ac_cv_cxx17=no])
-AC_MSG_RESULT([$ac_cv_cxx17])
-if test "$ac_cv_cxx17" != yes; then
+    [ac_cv_cxx20=yes], [ac_cv_cxx20=no])
+AC_MSG_RESULT([$ac_cv_cxx20])
+if test "$ac_cv_cxx20" != yes; then
     SAVE_CXX="${SAVE_CXX} -std=gnu++20"
     CXX="${CXX} -std=gnu++20"
     AC_MSG_CHECKING([whether the C++ compiler with -std=gnu++20 supports C++20])
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#if __cplusplus >= 202002L
 int f() { return 0; }
 #endif]], [[return f();]])],
-        [ac_cv_cxx17=yes], [ac_cv_cxx17=no])
-    AC_MSG_RESULT([$ac_cv_cxx17])
+        [ac_cv_cxx20=yes; export CXX], [ac_cv_cxx20=no])
+    AC_MSG_RESULT([$ac_cv_cxx20])
 fi
 
 AC_CACHE_CHECK([whether the C++ compiler understands rvalue references], [ac_cv_cxx_rvalue_references], [
@@ -149,7 +148,7 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <utility>
 template <typename... TS> struct foo { static constexpr size_t count = sizeof...(TS); };], [[long x = foo<>::count + foo<int, int, int, int, int>::count; (void) x;]])], [ac_cv_variadic_templates=yes], [ac_cv_variadic_templates=no])
 AC_MSG_RESULT([$ac_cv_variadic_templates])
 
-if test "$ac_cv_std_move" != yes -o "$ac_cv_variadic_templates" != yes -o "$ac_cv_cxx17" != yes; then
+if test "$ac_cv_std_move" != yes -o "$ac_cv_variadic_templates" != yes -o "$ac_cv_cxx20" != yes; then
     AC_MSG_ERROR([
 
 The C++ compiler does not appear to understand C++20.
@@ -443,4 +442,5 @@ extern void fail_masstree_precondition(const char* file, int line, const char* a
 
 AC_DEFINE_UNQUOTED([HAVE_UNALIGNED_ACCESS], [1], [Define if unaligned accesses are OK.])
 
+AC_CONFIG_SUBDIRS([tamer])
 AC_OUTPUT
