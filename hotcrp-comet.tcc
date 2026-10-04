@@ -29,6 +29,7 @@
 static constexpr double connection_timeout = 20;
 static constexpr unsigned site_validate_timeout = 120;
 static constexpr unsigned site_error_validate_timeout = 1;
+static constexpr double site_min_validate_interval = 1;
 static constexpr double user_validate_timeout = 3600;
 static double min_poll_timeout = 240;
 static double max_poll_timeout = 300;
@@ -132,6 +133,10 @@ class Site : public tamer::tamed_class {
         return eventid_;
     }
     inline bool is_valid() const;
+    inline bool may_validate() const;
+    inline bool failing() const {
+        return validate_fail_ > 0;
+    }
 
     enum source_type {
         source_validate = 0,
@@ -147,11 +152,16 @@ class Site : public tamer::tamed_class {
                           tamer::event<bool, std::string> done);
 
     void wait(eventid_t eventid, tamer::event<> done) {
-        if (!is_valid()) {
+        if (is_valid()) {
+            if (eventid != eventid_) {
+                done();
+            } else {
+                status_change_ += std::move(done);
+            }
+        } else if (may_validate()) {
             validate(std::move(done));
-        } else if (eventid != eventid_) {
-            done();
         } else {
+            // backing off a failing site: wait for an update (or timeout)
             status_change_ += std::move(done);
         }
     }
@@ -250,16 +260,24 @@ Json Site::status_json() const {
 }
 
 inline bool Site::is_valid() const {
-    if (!validate_at_
-        || recent_poll_noblock_ > 20) {
+    if (!validate_at_ || validate_fail_ > 0) {
         return false;
     }
     double elapsed = tamer::drecent() - validate_at_;
-    if (validate_fail_ > 0) {
-        return elapsed < (site_error_validate_timeout << (validate_fail_ - 1));
-    } else {
-        return elapsed < site_validate_timeout;
+    if (recent_poll_noblock_ > 20) {
+        // pollers keep missing updates: revalidate, but not too often
+        return elapsed < site_min_validate_interval;
     }
+    return elapsed < site_validate_timeout;
+}
+
+// A failing site revalidates only after an exponential backoff, so that a
+// broken back end isn't hammered by every poll.
+inline bool Site::may_validate() const {
+    return validating_
+        || validate_fail_ == 0
+        || tamer::drecent() - validate_at_
+           >= (site_error_validate_timeout << (validate_fail_ - 1));
 }
 
 bool Site::update(const Json& j, source_type source, eventid_t prev_eventid) {
@@ -269,6 +287,9 @@ bool Site::update(const Json& j, source_type source, eventid_t prev_eventid) {
         || !j["tracker_eventid"].is_u()) {
         ++nupfail_[source];
         if (source == source_validate) {
+            if (validate_fail_ == 0) {
+                log_msg() << "! " << url_ << " validation failed";
+            }
             validate_fail_ = std::min(validate_fail_ + 1, 7);
         }
         return false;
@@ -733,7 +754,7 @@ tamed void Connection::poll_handler(double timeout, tamer::event<> done) {
         }
     }
 
-    if (!site.status().empty()) {
+    if (!site.status().empty() && !site.failing()) {
         resj_.set("ok", true)
             .set("at", tamer::drecent())
             .set("tracker_eventid", site.eventid());
