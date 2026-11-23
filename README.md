@@ -10,10 +10,11 @@ Prerequisites
 -------------
 
 HotCRP Comet runs on Unix, including Mac OS X. Building it requires CMake
-3.20 or later, a C++23 compiler (such as GCC 13 or Clang 17 or later), the
-[llhttp](https://github.com/nodejs/llhttp) library, and
-[JSON for Modern C++](https://github.com/nlohmann/json) (nlohmann-json) 3.11
-or later. On Debian and Ubuntu, `apt install libllhttp-dev
+3.20 or later and a C++23 compiler (such as GCC 13 or Clang 17 or later).
+It also uses the [llhttp](https://github.com/nodejs/llhttp) and
+[JSON for Modern C++](https://github.com/nlohmann/json) (nlohmann-json)
+libraries, which the build downloads if they aren’t installed. To use
+installed copies: on Debian and Ubuntu, `apt install libllhttp-dev
 nlohmann-json3-dev`; with Homebrew, `brew install llhttp nlohmann-json`.
 
 Building
