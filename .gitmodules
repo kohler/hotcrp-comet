@@ -1,3 +1,3 @@
-[submodule "tamer"]
-	path = tamer
-	url = https://github.com/kohler/tamer
+[submodule "cotamer"]
+	path = cotamer
+	url = https://github.com/readablesystems/cotamer.git
