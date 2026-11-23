@@ -31,6 +31,12 @@ coroutine library, included as a git submodule.
 To build against a different Cotamer checkout, configure with
 `cmake -B build -DCOTAMER_DIR=/path/to/cotamer`.
 
+On Amazon Linux 2023, whose default compiler is too old, use GCC 14:
+
+    sudo dnf install gcc14 gcc14-c++ cmake
+    cmake -B build -DCMAKE_CXX_COMPILER=gcc14-g++ -DCMAKE_C_COMPILER=gcc14-gcc
+    cmake --build build
+
 Testing
 -------
 
