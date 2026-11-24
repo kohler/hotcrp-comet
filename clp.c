@@ -808,6 +808,7 @@ Clp_SetOptionChar(Clp_Parser *clp, int c, int type)
  *
  * <ul>
  * <li>An option has a negative ID.</li>
+ * <li>A long option either equals "no-" or starts with "no-no-".</li>
  * <li>Two different short options have the same name.</li>
  * <li>Two different long options have the same name.</li>
  * <li>A short and a long option are ambiguous, in that some option character
@@ -851,7 +852,6 @@ Clp_SetOptions(Clp_Parser *clp, int nopt, const Clp_Option *opt)
         /* Ignore negative option_ids, which are internal to CLP */
         if (opt[i].option_id < 0) {
             Clp_OptionError(clp, "CLP internal error: option %d has negative option_id", i);
-            iopt[i].ilong = iopt[i].ishort = iopt[i].ipos = iopt[i].ineg = iopt[i].unquoted = 0;
             continue;
         }
 
@@ -876,9 +876,16 @@ Clp_SetOptions(Clp_Parser *clp, int nopt, const Clp_Option *opt)
         if (iopt[i].ilong && strncmp(opt[i].long_name, "no-", 3) == 0) {
             iopt[i].ipos = 0;
             iopt[i].ineg = 1;
-            iopt[i].ilongoff = 3;
-            if (strncmp(opt[i].long_name + 3, "no-", 3) == 0)
-                Clp_OptionError(clp, "CLP internal error: option %d begins with \"no-no-\"", i);
+            if (opt[i].long_name[3] == 0) {
+                /* Long name "no-" is unusable; the short name (if any)
+                   remains, but is only negated */
+                Clp_OptionError(clp, "CLP internal error: option %d has long name \"no-\"", i);
+                iopt[i].ilong = 0;
+            } else {
+                iopt[i].ilongoff = 3;
+                if (strncmp(opt[i].long_name + 3, "no-", 3) == 0)
+                    Clp_OptionError(clp, "CLP internal error: option %d begins with \"no-no-\"", i);
+            }
         } else if (opt[i].flags & Clp_OnlyNegated) {
             iopt[i].ipos = 0;
             iopt[i].ineg = 1;
@@ -1000,6 +1007,10 @@ find_prefix_opt(Clp_Parser *clp, const char *arg,
     int i, fewer_dashes = 0, first_ambiguous = *ambiguous;
     int negated = clp && clp->negated;
     int first_charlen = (clp ? clp_utf8_charlen(clp->internal, arg) : 1);
+
+    /* An empty name matches nothing (rather than being ambiguous) */
+    if (*arg == 0 || *arg == '=')
+        return -1;
 
   retry:
     for (i = 0; i < nopt; i++) {
@@ -1912,7 +1923,7 @@ find_short(Clp_Parser *clp, const char *text)
  * <dd>The value string, if any.  NULL if there was no value.</dd>
  * <dt><tt>val</tt></dt>
  * <dd>An option's value type will parse the value string into this
- * union.</dd>
+ * union.  Zeroed if the option had no value.</dd>
  * </dl>
  *
  * The parsed argument is shifted off the argument list, so that sequential
@@ -1929,6 +1940,8 @@ Clp_Next(Clp_Parser *clp)
 
     /* Set up clp */
     clp->option = &clp_option_sentinel[-Clp_Done];
+    clp->negated = 0;
+    memset(&clp->val, 0, sizeof(clp->val));
     cli->ambiguous = 0;
 
     /* Get the next argument or option */
@@ -1966,6 +1979,10 @@ Clp_Next(Clp_Parser *clp)
         clp->option = &clp_option_sentinel[-Clp_BadOption];
         cli->current_short = cli->is_short && !cli->could_be_short;
         cli->negated_by_no = 0;
+        /* If the argument could be either long or short, the error message
+           names the whole argument, so skip the whole argument. */
+        if (cli->could_be_short)
+            cli->is_short = 0;
         if (cli->ambiguous)
             ambiguity_error(clp, cli->ambiguous, cli->ambiguous_values,
                             cli->opt, cli->iopt, cli->option_chars,
@@ -2043,8 +2060,12 @@ Clp_Next(Clp_Parser *clp)
                 cli->xtext = clpsave.xtext;
                 clp->option = &clp_option_sentinel[-Clp_BadOption];
                 return Clp_BadOption;
-            } else
+            } else {
+                /* optional value rejected: report no value */
                 Clp_RestoreParser(clp, &clpsave);
+                clp->vstr = 0;
+                memset(&clp->val, 0, sizeof(clp->val));
+            }
         }
     }
 
